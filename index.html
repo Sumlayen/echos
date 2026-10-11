@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Echoes of the Fallen Star</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <style>
+    :root {
+      --frame: #0a0d16;
+      --frame-edge: #232a3d;
+      --accent: #f2c14e;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #05070c;
+      color: #cfd6e6;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow: hidden;
+    }
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 12px;
+      background:
+        radial-gradient(ellipse at 50% 0%, #131a2c 0%, #070a12 55%, #04060a 100%);
+    }
+    #stage-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+    }
+    #game-frame {
+      position: relative;
+      padding: 10px;
+      background: linear-gradient(#1a2133, #0d1220);
+      border: 1px solid var(--frame-edge);
+      border-radius: 6px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    }
+    #game-container {
+      position: relative;
+      line-height: 0;
+    }
+    #game-container canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    /* Optional CRT scanline overlay, toggled from the in-game Settings menu. */
+    #scanlines {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.22) 0px,
+        rgba(0, 0, 0, 0.22) 1px,
+        rgba(255, 255, 255, 0.02) 1px,
+        rgba(255, 255, 255, 0.02) 3px
+      );
+      mix-blend-mode: multiply;
+    }
+    #scanlines.on { opacity: 1; }
+    #hint {
+      flex: 0 0 auto;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: #7f8ba6;
+      text-align: center;
+      user-select: none;
+    }
+    #hint b { color: var(--accent); font-weight: 600; }
+    #hint span { white-space: nowrap; }
+    #boot-error {
+      position: absolute;
+      inset: 10px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      color: #ffb4b4;
+      background: rgba(10, 6, 8, 0.9);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    @media (max-width: 720px) {
+      #hint { font-size: 11px; }
+      #game-frame { padding: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="stage-wrap">
+      <div id="game-frame">
+        <div id="game-container">
+          <div id="scanlines"></div>
+          <div id="boot-error"></div>
+        </div>
+      </div>
+    </div>
+    <div id="hint">
+      <span><b>Move</b> WASD / Arrows</span> &nbsp;·&nbsp;
+      <span><b>Confirm / Interact</b> Enter, Space, E</span> &nbsp;·&nbsp;
+      <span><b>Menu / Back</b> Esc</span> &nbsp;·&nbsp;
+      <span><b>Battle</b> 1-5 quick commands</span> &nbsp;·&nbsp;
+      <span><b>Save</b> Esc &rarr; Save</span>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

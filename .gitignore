@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.tmp/
+
+# e2e artifacts: screenshots and run logs written by scripts/e2e.mjs
+tmp_e2e/
+
