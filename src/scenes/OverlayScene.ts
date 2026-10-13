@@ -400,7 +400,7 @@ export class OverlayScene extends Phaser.Scene {
 
     this.junk.push(new Panel(this, 250, 58, 358, 214));
     this.paintGearDetail();
-    this.say('[UP/DOWN] PERSON   [LEFT/RIGHT] SLOT   [Z] CHANGE');
+    this.say('[UP/DOWN] PERSON   [LEFT/RIGHT] SLOT   [Z] CHANGE   [Q] TABS');
   }
 
   private paintGearDetail(): void {
@@ -580,7 +580,7 @@ export class OverlayScene extends Phaser.Scene {
 
   private buildSettings(): void {
     this.form = new SettingsForm(this, VIEW_W / 2 - 150, 70);
-    this.say('[LEFT/RIGHT] CHANGE   [UP/DOWN] ROW');
+    this.say('[LEFT/RIGHT] CHANGE   [UP/DOWN] ROW   [Q] TABS');
   }
 
   /* ---------------------------------------------------------------- shop */
@@ -698,7 +698,11 @@ export class OverlayScene extends Phaser.Scene {
     }
 
     if (this.tab === 'settings') {
+      // The form owns the arrows, but the tab strip has to stay reachable or
+      // SETTINGS is a dead end — the only way out used to be Esc/X, which shuts
+      // the whole menu rather than moving to the next tab.
       if (key === 'UP' || key === 'DOWN' || key === 'LEFT' || key === 'RIGHT') this.form?.key(key);
+      else if (key === 'SPECIAL') this.cycleTab(1);
       return;
     }
 
@@ -740,8 +744,16 @@ export class OverlayScene extends Phaser.Scene {
   }
 
   private moveSlot(dir: number): void {
-    const count = EQUIP_SLOTS.length;
-    this.slot = (this.slot + dir + count) % count;
+    // GEAR is the only tab that claims LEFT/RIGHT for itself, so rolling off
+    // either end steps onto the neighbouring tab instead of wrapping the slot
+    // index. Wrapping here used to trap the player on GEAR: the arrow keys
+    // cycled the slots forever and the tab strip never moved past it.
+    const next = this.slot + dir;
+    if (next < 0 || next >= EQUIP_SLOTS.length) {
+      this.cycleTab(dir);
+      return;
+    }
+    this.slot = next;
     sfx('cursor');
     this.showTab();
   }

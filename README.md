@@ -57,7 +57,10 @@ remapping, or adding a gamepad, is a change to that one file.
 | Open the party menu | `Esc` in the overworld |
 
 The overlay menu (`OverlayScene`) carries **Party · Items · Gear · Quests · Save ·
-Settings**, plus **Buy / Sell** inside the shop. Settings covers music level, SFX level,
+Settings**, plus **Buy / Sell** inside the shop. On most tabs `←`/`→` moves between tabs;
+the Gear tab gives them to the equipment slots instead, and rolling off either end of the
+slot list steps onto the neighbouring tab. `Q`/`Shift` cycles tabs from any tab, including
+Settings (whose arrows belong to the form). Settings covers music level, SFX level,
 dialogue speed (characters per second), shortened battle animations, and screen shake.
 
 ## What's in the game
@@ -128,7 +131,8 @@ defeat (revive + send home)**, plus an empty battle request bailing out cleanly.
 restarts the overworld with a direction key held and asserts that **walking still works in every
 direction afterwards** (Phaser detaches a scene's `Key` objects on shutdown, so a stale held-key
 cache leaves one direction stuck on and kills the rest), that nothing drifts with no keys held,
-and that **`Esc` both opens and closes the menu**. Any
+that **`Esc` both opens and closes the menu**, and that the menu's **tab strip is walkable end
+to end** (no tab may swallow the arrow keys). Any
 `console.error`, `console.warn` or page error fails the run, and so does any failed
 assertion (non-zero exit). It reads the menu cursor back instead of blindly counting arrow
 presses, so it fails loudly if a menu becomes unreachable or invisible.
