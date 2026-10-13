@@ -446,6 +446,77 @@ check('ESC closes the menu again', !closed.active && !closed.flag, JSON.stringif
 const afterClose = await walk('ArrowDown');
 check('walking works after closing the menu', afterClose.dy > 8, JSON.stringify(afterClose));
 
+/* --------------------------------------------------- overlay tab strip */
+
+/**
+ * GEAR claims LEFT/RIGHT for its equipment slots and SETTINGS hands them to the
+ * settings form, so both used to swallow the arrow keys and the tab strip froze
+ * (GEAR forever, SETTINGS only escapable by closing the whole menu). The strip
+ * has to stay walkable in both directions while those tabs keep their own use
+ * of the arrows.
+ */
+const overlayTab = () =>
+  page.evaluate(() => {
+    const o = window.game.scene.getScene('OverlayScene');
+    return { tab: o?.tab ?? null, slot: o?.slot ?? null };
+  });
+
+const walkTabs = async (key, want, max = 16) => {
+  const seen = [];
+  for (let i = 0; i < max; i++) {
+    await page.keyboard.press(key);
+    await page.waitForTimeout(200);
+    seen.push(await overlayTab());
+    if (seen[seen.length - 1].tab === want) break;
+  }
+  return seen;
+};
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+const startTab = await overlayTab();
+const rightWalk = await walkTabs('ArrowRight', 'settings');
+const visited = [...new Set([startTab.tab, ...rightWalk.map((s) => s.tab)])];
+const trace = rightWalk.map((s) => `${s.tab}/${s.slot}`).join(' ');
+check(
+  'arrow right walks the whole tab strip (no dead end on GEAR)',
+  visited.length === 6 && rightWalk[rightWalk.length - 1].tab === 'settings',
+  trace
+);
+const gearSlots = rightWalk.filter((s) => s.tab === 'gear').map((s) => s.slot);
+check(
+  'gear slots still cycle inside the GEAR tab',
+  gearSlots.length === 5 && gearSlots.every((s, i) => s === i),
+  JSON.stringify(gearSlots)
+);
+await shot('24-tab-strip');
+
+await page.keyboard.press('q');
+await page.waitForTimeout(250);
+const offSettings = await overlayTab();
+check('Q walks out of the SETTINGS tab', offSettings.tab === 'party', JSON.stringify(offSettings));
+
+await page.keyboard.press('ArrowRight');
+await page.waitForTimeout(200);
+await page.keyboard.press('ArrowRight');
+await page.waitForTimeout(200);
+const onGear = await overlayTab();
+const leftWalk = await walkTabs('ArrowLeft', 'items');
+check(
+  'arrow left rolls off GEAR onto the previous tab',
+  onGear.tab === 'gear' && leftWalk[leftWalk.length - 1].tab === 'items',
+  `${onGear.tab}/${onGear.slot} -> ${leftWalk.map((s) => `${s.tab}/${s.slot}`).join(' ')}`
+);
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+const closedAfterTabs = await menuState();
+check(
+  'menu still closes after tab walking',
+  !closedAfterTabs.active && !closedAfterTabs.flag,
+  JSON.stringify(closedAfterTabs)
+);
+
 const bootError = await page.evaluate(() => {
   const el = document.getElementById('boot-error');
   return el && el.style.display === 'flex' ? el.textContent : null;

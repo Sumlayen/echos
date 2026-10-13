@@ -19,6 +19,7 @@ npm run dev          # http://127.0.0.1:5173/
 - [Controls](#controls)
 - [What's in the game](#whats-in-the-game)
 - [Testing](#testing)
+- [Pull requests](#pull-requests)
 - [Debug hooks](#debug-hooks)
 - [Project layout](#project-layout)
 - [How it's put together](#how-its-put-together)
@@ -57,7 +58,10 @@ remapping, or adding a gamepad, is a change to that one file.
 | Open the party menu | `Esc` in the overworld |
 
 The overlay menu (`OverlayScene`) carries **Party · Items · Gear · Quests · Save ·
-Settings**, plus **Buy / Sell** inside the shop. Settings covers music level, SFX level,
+Settings**, plus **Buy / Sell** inside the shop. On most tabs `←`/`→` moves between tabs;
+the Gear tab gives them to the equipment slots instead, and rolling off either end of the
+slot list steps onto the neighbouring tab. `Q`/`Shift` cycles tabs from any tab, including
+Settings (whose arrows belong to the form). Settings covers music level, SFX level,
 dialogue speed (characters per second), shortened battle animations, and screen shake.
 
 ## What's in the game
@@ -128,7 +132,8 @@ defeat (revive + send home)**, plus an empty battle request bailing out cleanly.
 restarts the overworld with a direction key held and asserts that **walking still works in every
 direction afterwards** (Phaser detaches a scene's `Key` objects on shutdown, so a stale held-key
 cache leaves one direction stuck on and kills the rest), that nothing drifts with no keys held,
-and that **`Esc` both opens and closes the menu**. Any
+that **`Esc` both opens and closes the menu**, and that the menu's **tab strip is walkable end
+to end** (no tab may swallow the arrow keys). Any
 `console.error`, `console.warn` or page error fails the run, and so does any failed
 assertion (non-zero exit). It reads the menu cursor back instead of blindly counting arrow
 presses, so it fails loudly if a menu becomes unreachable or invisible.
@@ -143,6 +148,21 @@ grep -n "FAIL\|aim-miss\|pageerror" tmp_e2e_run.log || echo NO_FAILURES
 
 The script uses `playwright-core`; if no Playwright-managed Chromium is installed it falls
 back to your installed Chrome.
+
+## Pull requests
+
+Branches come off **`develop`** (`main` stays the released line). Every pull request
+ships with a notes file in [`notes/`](notes/README.md) — written on the branch, so it
+lands in the PR diff and can be read from the merge commit later:
+
+```
+notes/<YYYY-MM-DD>-<branch-slug>.md      e.g. notes/2026-10-13-overlay-gear-tab-cycle.md
+```
+
+Each file records the symptom and how to reproduce it, the root cause with the offending
+code quoted, what the change does, the **actual** verification output (including the
+before-fix failure that proves a regression check has teeth), files touched, and what was
+deliberately left unfixed. The last section is the PR description, ready to paste.
 
 ## Debug hooks
 
@@ -176,6 +196,7 @@ src/
   ui/         Dialog, DialogueRuntime, Window (Panel / MenuList), Text, Keys
 tests/        vitest engine tests
 scripts/      e2e.mjs — headless browser smoke test
+notes/        one Markdown file per pull request: symptom, root cause, verification
 docs/         visual-research.md — the art and animation references behind the look
 ```
 
