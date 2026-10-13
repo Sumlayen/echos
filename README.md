@@ -124,7 +124,11 @@ npm run e2e
 
 It boots the game, walks title → overworld, then asserts on **victory, flee, story hand-off
 (resuming the aftermath), story flee, a stale `returnTo` falling back to the overworld, and
-defeat (revive + send home)**, plus an empty battle request bailing out cleanly. Any
+defeat (revive + send home)**, plus an empty battle request bailing out cleanly. It then
+restarts the overworld with a direction key held and asserts that **walking still works in every
+direction afterwards** (Phaser detaches a scene's `Key` objects on shutdown, so a stale held-key
+cache leaves one direction stuck on and kills the rest), that nothing drifts with no keys held,
+and that **`Esc` both opens and closes the menu**. Any
 `console.error`, `console.warn` or page error fails the run, and so does any failed
 assertion (non-zero exit). It reads the menu cursor back instead of blindly counting arrow
 presses, so it fails loudly if a menu becomes unreachable or invisible.

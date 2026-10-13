@@ -352,8 +352,99 @@ console.log(`empty request: world=${empty.worldOn} battle=${empty.battleOn}`);
 await shot('20-empty-request');
 check('empty request bails to WorldScene', empty.worldOn === true && empty.battleOn === false);
 
+/* ---------------------------------- overworld movement across scene restarts */
 
+/**
+ * Phaser detaches every Key from a scene's KeyboardPlugin when that scene shuts
+ * down (`KeyboardPlugin.shutdown` -> `removeAllKeys(true)`), and a detached Key
+ * keeps whatever `isDown` it had. `WorldScene` polls held keys to walk, so a key
+ * cache that survives a restart stops updating and leaves the direction that
+ * was held at the restart stuck on: the player walks that way forever and
+ * ignores every other key. Hold RIGHT across a restart, then prove the fresh
+ * scene is clean.
+ */
+const walk = async (key, ms = 600) => {
+  const at = () =>
+    page.evaluate(() => {
+      const ws = window.game.scene.getScene('WorldScene');
+      return [ws.player.x, ws.player.y];
+    });
+  const before = await at();
+  await page.keyboard.down(key);
+  await page.waitForTimeout(ms);
+  await page.keyboard.up(key);
+  await page.waitForTimeout(150);
+  const after = await at();
+  return { dx: Math.round(after[0] - before[0]), dy: Math.round(after[1] - before[1]) };
+};
 
+await page.keyboard.down('ArrowRight');
+await page.waitForTimeout(400);
+await page.evaluate(() => window.game.scene.start('WorldScene', { map: 'village', x: 19, y: 16 }));
+await page.waitForTimeout(1200);
+await page.keyboard.up('ArrowRight');
+await page.waitForTimeout(400);
+await shot('21-world-restart');
+
+const held = await page.evaluate(() => {
+  const ws = window.game.scene.getScene('WorldScene');
+  const cached = ws.keys ?? {};
+  const live = ws.input.keyboard.keys;
+  return {
+    stuck: Object.keys(cached).filter((n) => cached[n].isDown),
+    orphaned: Object.keys(cached).filter((n) => cached[n] !== live[cached[n].keyCode]),
+    registered: live.filter(Boolean).length
+  };
+});
+check('no direction stuck after a scene restart', held.stuck.length === 0, JSON.stringify(held));
+check('held-key cache belongs to the live plugin', held.orphaned.length === 0, JSON.stringify(held));
+check('held keys are registered with the plugin', held.registered >= 8, String(held.registered));
+
+const idleAt = () =>
+  page.evaluate(() => {
+    const ws = window.game.scene.getScene('WorldScene');
+    return [ws.player.x, ws.player.y];
+  });
+const rest0 = await idleAt();
+await page.waitForTimeout(1200);
+const rest1 = await idleAt();
+const drift = Math.round(Math.max(Math.abs(rest1[0] - rest0[0]), Math.abs(rest1[1] - rest0[1])));
+check('no phantom movement with no keys held', drift < 2, `drift=${drift}px`);
+await shot('22-world-idle');
+
+const down = await walk('ArrowDown');
+const up = await walk('ArrowUp');
+const wasd = await walk('s');
+check('arrow down moves after a restart', down.dy > 8, JSON.stringify(down));
+check('arrow up moves after a restart', up.dy < -8, JSON.stringify(up));
+check('wasd moves after a restart', wasd.dy > 8, JSON.stringify(wasd));
+
+/* ------------------------------------------------------ menu toggle (ESC) */
+
+/**
+ * Both the world and the overlay see every keypress, so the ESC that closes
+ * the menu is still queued in the world scene and can reopen it in the same
+ * frame. A menu that will not close also freezes walking, since the world
+ * ignores keys while `overlayOpen` is set.
+ */
+const menuState = () =>
+  page.evaluate(() => ({
+    active: window.game.scene.isActive('OverlayScene'),
+    flag: window.game.scene.getScene('WorldScene').overlayOpen
+  }));
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+const opened = await menuState();
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+const closed = await menuState();
+await shot('23-menu-closed');
+check('ESC opens the menu', opened.active && opened.flag, JSON.stringify(opened));
+check('ESC closes the menu again', !closed.active && !closed.flag, JSON.stringify(closed));
+
+const afterClose = await walk('ArrowDown');
+check('walking works after closing the menu', afterClose.dy > 8, JSON.stringify(afterClose));
 
 const bootError = await page.evaluate(() => {
   const el = document.getElementById('boot-error');

@@ -102,6 +102,10 @@ export class WorldScene extends Phaser.Scene {
     this.offHandlers = [];
     this.overlayOpen = false;
     this.transitioning = false;
+    // Phaser drops every Key from the scene's KeyboardPlugin on shutdown and a
+    // dropped Key keeps whatever `isDown` it had, so a cached key set from the
+    // previous run of this scene is dead weight (see `heldDir`).
+    this.keys = null;
   }
 
   create(): void {
@@ -158,6 +162,10 @@ export class WorldScene extends Phaser.Scene {
 
     this.offHandlers.push(
       bus.on('overlay:close', () => {
+        // The ESC that just closed the menu is also sitting in this scene's key
+        // queue (both scenes see every keypress). Drop it, or the same press
+        // reopens the menu in this very frame.
+        this.pad.clear();
         this.overlayOpen = false;
         this.scene.stop(SCENES.overlay);
         this.refreshHud();
@@ -336,17 +344,26 @@ export class WorldScene extends Phaser.Scene {
 
   /* ------------------------------------------------------------- movement */
 
+  /**
+   * Held-direction keys, re-armed whenever they no longer belong to this
+   * scene's live KeyboardPlugin. Phaser removes every Key from the plugin when
+   * the scene shuts down (`KeyboardPlugin.shutdown` -> `removeAllKeys(true)`)
+   * and `Key.destroy()` never clears `isDown`, so a cache that outlives a warp,
+   * encounter or story trigger stops updating entirely and leaves whatever
+   * direction was held at the restart stuck on for good.
+   */
   private keys: Record<string, Phaser.Input.Keyboard.Key> | null = null;
 
   private heldDir(): Dir | null {
-    if (!this.keys) {
-      const kb = this.input.keyboard;
-      if (!kb) return null;
+    const kb = this.input.keyboard;
+    if (!kb) return null;
+    if (!this.keys || this.keys.RIGHT.plugin !== kb) {
       this.keys = kb.addKeys(
         'UP,DOWN,LEFT,RIGHT,W,A,S,D'
       ) as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     }
-    const down = (a: string, b: string): boolean => this.keys![a].isDown || this.keys![b].isDown;
+    const keys = this.keys;
+    const down = (a: string, b: string): boolean => keys[a].isDown || keys[b].isDown;
     if (down('UP', 'W')) return 'up';
     if (down('DOWN', 'S')) return 'down';
     if (down('LEFT', 'A')) return 'left';
