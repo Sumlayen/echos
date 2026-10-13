@@ -19,6 +19,7 @@ npm run dev          # http://127.0.0.1:5173/
 - [Controls](#controls)
 - [What's in the game](#whats-in-the-game)
 - [Testing](#testing)
+- [Pull requests](#pull-requests)
 - [Debug hooks](#debug-hooks)
 - [Project layout](#project-layout)
 - [How it's put together](#how-its-put-together)
@@ -148,6 +149,21 @@ grep -n "FAIL\|aim-miss\|pageerror" tmp_e2e_run.log || echo NO_FAILURES
 The script uses `playwright-core`; if no Playwright-managed Chromium is installed it falls
 back to your installed Chrome.
 
+## Pull requests
+
+Branches come off **`develop`** (`main` stays the released line). Every pull request
+ships with a notes file in [`notes/`](notes/README.md) — written on the branch, so it
+lands in the PR diff and can be read from the merge commit later:
+
+```
+notes/<YYYY-MM-DD>-<branch-slug>.md      e.g. notes/2026-10-13-overlay-gear-tab-cycle.md
+```
+
+Each file records the symptom and how to reproduce it, the root cause with the offending
+code quoted, what the change does, the **actual** verification output (including the
+before-fix failure that proves a regression check has teeth), files touched, and what was
+deliberately left unfixed. The last section is the PR description, ready to paste.
+
 ## Debug hooks
 
 Append **`?debug=1`** to the URL to expose `window.game` and `window.session` (see
@@ -180,6 +196,7 @@ src/
   ui/         Dialog, DialogueRuntime, Window (Panel / MenuList), Text, Keys
 tests/        vitest engine tests
 scripts/      e2e.mjs — headless browser smoke test
+notes/        one Markdown file per pull request: symptom, root cause, verification
 docs/         visual-research.md — the art and animation references behind the look
 ```
 

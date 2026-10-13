@@ -6,7 +6,7 @@
 | **Base** | `develop` (created from `main` at `cfac8be`) |
 | **Commit** | `45a186c` — *Fix the menu tab strip getting stuck on GEAR* |
 | **Date** | 2026-10-13 |
-| **PR** | _fill in once opened_ |
+| **PR** | [#1](https://github.com/Sumlayen/echos/pull/1) — `fix/overlay-gear-tab-cycle` → `develop` |
 
 ---
 
