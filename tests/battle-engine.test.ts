@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { BattleEngine, type BattleEvent } from '../src/battle/BattleEngine';
 import { fleeChance } from '../src/battle/Damage';
+import { SKILLS } from '../src/data/Skills';
 import { GameState } from '../src/core/GameState';
 import { Rng } from '../src/core/Rng';
 
@@ -92,6 +93,69 @@ describe('BattleEngine.choose', () => {
       fled = true;
     }
     expect(fled).toBe(true);
+  });
+});
+
+describe('targeting', () => {
+  /**
+   * The reported bug was "the wolf's damage lands on my own bar". The engine
+   * was audited over 150 seeded battles and never once aimed a hit at its own
+   * side — the desync lived in the view, not the model. This pins the model's
+   * half of that down so a future targeting change cannot regress it silently.
+   */
+  it('never aims a hit at the side that dealt it', () => {
+    let hits = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const engine = new BattleEngine(
+        freshState(['kael', 'lyra', 'rowan']),
+        null,
+        ['wolf', 'wisp', 'beetle'],
+        { seed, fleeAllowed: false }
+      );
+      engine.start();
+
+      let turns = 0;
+      while (engine.outcome === 'ongoing' && turns++ < 200) {
+        if (!engine.awaitingInput()) break;
+        const events = engine.choose(
+          seed % 3 === 0 ? { kind: 'skill', skillId: 'cinder' } : { kind: 'attack' }
+        );
+        for (const e of events) {
+          if (e.t !== 'hit') continue;
+          hits++;
+          const to = engine.unit(e.to);
+          expect(to).toBeDefined();
+          // `status` is environmental damage (burn, poison) with no actor.
+          if (e.from === 'status') continue;
+          const from = engine.unit(e.from);
+          expect(from).toBeDefined();
+          expect(from!.side).not.toBe(to!.side);
+        }
+      }
+    }
+    // Guard against the loop having quietly done nothing at all.
+    expect(hits).toBeGreaterThan(200);
+  });
+
+  /**
+   * `choose()` resolves the whole round at once, so the HUD needs the cost on
+   * the event: without it a caster's MP bar empties before the spell animates.
+   */
+  it('carries the MP cost on the use event', () => {
+    const engine = new BattleEngine(fastParty(freshState()), null, ['wolf', 'wolf'], { seed: 3 });
+    engine.start();
+
+    const actor = engine.awaitingInput();
+    expect(actor?.uid).toBe('p0');
+    const before = actor!.mp;
+
+    const events = engine.choose({ kind: 'skill', skillId: 'cleave' });
+    const use = events.find((e) => e.t === 'use' && e.uid === 'p0');
+    if (!use || use.t !== 'use') throw new Error('the caster never announced the skill');
+
+    expect(use.mp).toBe(before - SKILLS.cleave.mp);
+    // The model agrees with the event; only the *timing* of the paint differs.
+    expect(engine.unit('p0')?.mp).toBe(use.mp);
   });
 });
 

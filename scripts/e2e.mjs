@@ -231,6 +231,39 @@ console.log(`battle forced: ${forced}`);
 await page.waitForTimeout(1200);
 await shot('07-battle');
 
+/**
+ * Arm a read-only sampler before the first command. `shown` is what the HUD
+ * paints; `model` is what the engine has already resolved for the whole round.
+ * The exact expectation is `model` plus whatever the queue has not animated
+ * yet — that catches both failure modes: painting the live model (the reported
+ * desync, a bar dropping before any foe moved) and a bar frozen at its old
+ * value, which would lag forever and never land the hit.
+ */
+await page.evaluate(() => {
+  const w = window;
+  w.__samples = [];
+  const sc = w.game.scene.getScene('BattleScene');
+  if (!sc || !sc.engine) return;
+  sc.events.on('preupdate', () => {
+    const me = sc.engine.party[0];
+    const s = sc.shown?.get(me?.uid);
+    if (!me || !s) return;
+    let owed = 0;
+    for (const e of sc.pending ?? []) {
+      if (e.t === 'hit' && e.to === me.uid) owed += e.damage;
+      else if (e.t === 'heal' && e.to === me.uid) owed -= e.amount;
+      else if (e.t === 'revive' && e.uid === me.uid) owed -= e.hp;
+    }
+    w.__samples.push({
+      pending: (sc.pending ?? []).length,
+      painted: sc.rows?.[0]?.hpText?.readable ?? null,
+      want: `${me.hp + owed}/${me.maxHp}`,
+      floats: sc.children.list.filter((o) => o.depth === 600).length,
+      numbers: (sc.history ?? []).some((h) => /takes \d+\./.test(h))
+    });
+  });
+});
+
 const run = await driveBattle('08-victory');
 console.log(`victory drive: ${run.reason} in ${run.steps} steps`);
 console.log(`  trace: ${run.trace.join(' > ')}`);
@@ -241,6 +274,26 @@ check('victory clears session.battle', run.last.battle === null, JSON.stringify(
 check('victory leaves BattleScene', run.last.battleOn === false);
 check('victory returns to WorldScene', run.last.worldOn === true);
 check('victory outcome', run.last.outcome === 'victory', String(run.last.outcome));
+
+/* ------------------------------------------- presentation-vs-model timing */
+
+const samples = await page.evaluate(() => {
+  const all = window.__samples ?? [];
+  window.__samples = [];
+  return all;
+});
+const midQueue = samples.filter((s) => s.pending > 0);
+const wrong = samples.filter((s) => s.painted !== s.want);
+const peakFloats = samples.reduce((m, s) => Math.max(m, s.floats), 0);
+console.log(`  samples: ${samples.length} | mid-queue: ${midQueue.length} | mismatched: ${wrong.length} | floats peak: ${peakFloats}`);
+check(
+  'the painted party bar tracks the event queue exactly',
+  wrong.length === 0,
+  wrong.length ? `${wrong.length} bad frames, e.g. ${JSON.stringify(wrong[0])}` : `${samples.length} frames`
+);
+check('the queue really was mid-flight during the run', midQueue.length > 0, `${midQueue.length} frames`);
+check('damage numbers float over the target', peakFloats > 0, `peak ${peakFloats}`);
+check('combat log carries the damage numbers', samples.some((s) => s.numbers));
 
 /* ------------------------------------------------------------------ flee */
 
