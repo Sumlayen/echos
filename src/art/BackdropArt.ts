@@ -5,7 +5,9 @@
  * Rules that keep them reading as 16-bit rather than digital painting:
  *  - flat colour bands + checker dither instead of smooth gradients,
  *  - exactly three depth layers (sky / mid / near), each a flat silhouette,
- *  - one light source per image, always the star or the moon.
+ *  - one light source per image, always the star or the moon,
+ *  - no corner vignetting: depth comes from those layers, never from
+ *    scattering ink pixels over the frame edges.
  */
 
 import { P } from './Palette';
@@ -99,66 +101,56 @@ function glow(pc: PC, cx: number, cy: number, r: number, ramp: readonly string[]
   }
 }
 
-/** Dithered corner darkening so sprites and text pop against the backdrop. */
-function vignette(pc: PC, strength = 0.5): void {
-  const cx = pc.w / 2, cy = pc.h / 2;
-  const maxD = Math.sqrt(cx * cx + cy * cy);
-  for (let y = 0; y < pc.h; y++) {
-    for (let x = 0; x < pc.w; x++) {
-      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) / maxD;
-      if (d < 0.45) continue;
-      const t = Math.min(1, ((d - 0.45) / 0.55) * strength * 1.6);
-      if (PC.hash(x, y, 99) < t) pc.p(x, y, P.ink);
-    }
-  }
-}
-
 /* ------------------------------------------------------------- title card */
 
 export function titleBackdrop(): PC {
   const pc = canvas();
-  // dusk sky, warm at the horizon where the star came down
-  bands(pc, 0, 250, ['#070b16', '#101a30', '#22243f', '#4a2f45', '#7c4238', '#a4603c']);
-  stars(pc, 0, 190, 11, 0.35);
+  // Dawn over the Ashen Wood: the star came down and the night is going with it.
+  bands(pc, 0, 236, ['#0d1526', '#16203a', '#2b2745', '#553449', '#8a4634', '#c8763a', '#f0c04e']);
+  // the last of the night stars, and only where the sky is still cold
+  stars(pc, 0, 132, 11, 0.06);
 
-  // crescent moon
-  pc.disc(96, 62, 16, 16, P.bone);
-  pc.disc(104, 58, 15, 15, '#101a30');
-  pc.disc(92, 66, 3, 3, P.paper);
-
-  // the fallen star: core, spokes and an entry trail
-  glow(pc, 452, 96, 46, ['#3a2a4e', '#6b3f52', '#a4552f', '#ef8a3c']);
-  pc.disc(452, 96, 13, 13, P.gold);
-  pc.disc(452, 96, 9, 9, P.cream);
-  pc.disc(452, 96, 5, 5, P.paper);
+  // the fallen star, low and half-set behind the far ridge: the one light source.
+  // The glow ramps out to the sky colour it sits in, so its square bounds vanish.
+  glow(pc, 468, 212, 26, ['#a4552f', '#ef8a3c', '#c8763a']);
+  pc.disc(468, 212, 13, 13, P.gold);
+  pc.disc(468, 212, 9, 9, P.cream);
+  pc.disc(468, 212, 4, 4, P.paper);
   for (let k = 0; k < 12; k++) {
     const a = (k / 12) * Math.PI * 2 + 0.26;
-    const len = k % 3 === 0 ? 40 : 26;
-    pc.line(452, 96, Math.round(452 + Math.cos(a) * len), Math.round(96 + Math.sin(a) * len), P.cream);
+    const len = k % 3 === 0 ? 32 : 19;
+    pc.line(468, 212, Math.round(468 + Math.cos(a) * len), Math.round(212 + Math.sin(a) * len), P.cream);
   }
-  for (let t = 0; t < 1; t += 0.02) {
-    const x = Math.round(452 - t * 250);
-    const y = Math.round(96 - t * 70 + t * t * 40);
-    const w = Math.round(1 + t * 5);
-    pc.rect(x - w, y - Math.floor(w / 2), w * 2, Math.max(1, w), mix(P.ember, P.gold, 1 - t));
+  // the trail it dragged in still smoulders across the sky, thickest at the head
+  for (let t = 0; t < 1; t += 0.014) {
+    const x = Math.round(196 + t * 268);
+    const y = Math.round(58 + t * 152 - Math.sin(t * Math.PI) * 22);
+    const w = Math.round(1 + t * 2);
+    pc.rect(x - w, y - Math.floor(w / 2), w * 2, Math.max(1, w), mix(P.ember, P.gold, t));
   }
 
-  // far mountains, near ridge, treeline
-  ridge(pc, 214, 26, 12, '#2a2b45', 3);
-  ridge(pc, 246, 18, 9, '#1d1f33', 5);
-  mist(pc, 236, 22, '#5a4a68', 7, 0.35);
-  pineRow(pc, 292, 40, '#141a26', 9, 30);
+  // three flat depth layers; the far one cuts the star off at the horizon
+  ridge(pc, 214, 22, 12, '#4a3f5c', 3);
+  mist(pc, 228, 22, '#8a6a58', 7, 0.3);
+  ridge(pc, 246, 16, 9, '#2f2739', 5);
+  pineRow(pc, 290, 44, '#1b1a24', 9, 28);
+  // where it landed, still burning — ramped out to the ridge so it has no edge
+  glow(pc, 524, 274, 26, ['#8a4423', '#6b3418', '#2f2739']);
 
-  // crater glow on the horizon behind the village
-  glow(pc, 520, 272, 58, ['#3a2118', '#6b3418', '#a4512a']);
-
-  // village rooftops in the near band
-  const roof = '#0a0d16';
+  // village in the near band, rooflines rim-lit from the star on the right
+  const roof = '#0d1119';
+  const rim = '#4a3a34';
   const house = (x: number, w: number, h: number) => {
     pc.rect(x, 330 - h, w, h, roof);
     pc.tri(x - 4, 330 - h, x + w / 2, 330 - h - 18, x + w + 4, 330 - h, roof);
+    pc.vline(x + w - 1, 330 - h + 1, h - 1, rim);
     pc.rect(x + 6, 330 - h + 12, 5, 6, P.gold);
     pc.rect(x + 6, 330 - h + 12, 5, 1, P.cream);
+    pc.rect(x + w - 10, 330 - h - 14, 4, 10, roof);
+    for (let j = 0; j < 8; j++) {
+      const sx = x + w - 9 + Math.round(Math.sin(j * 0.7 + x) * 2);
+      pc.rect(sx, 330 - h - 20 - j * 3, 2, 2, '#3f3b46');
+    }
   };
   house(60, 40, 44);
   house(120, 30, 34);
@@ -173,10 +165,9 @@ export function titleBackdrop(): PC {
   pc.tri(390, 290, 403, 278, 416, 290, roof);
   for (let x = 440; x < 620; x += 18) pc.rect(x, 312, 3, 18, roof);
   pc.rect(440, 318, 180, 3, roof);
-  pc.rect(0, 330, pc.w, 30, '#05070d');
-  pc.speckle(0, 330, pc.w, 30, '#0d1220', 0.2, 17);
-
-  vignette(pc, 0.55);
+  // foreground: a warm lip where the ground catches the dawn, no ink scatter
+  pc.rect(0, 330, pc.w, 30, '#10151f');
+  pc.rect(0, 330, pc.w, 1, '#4a3a2c');
   return pc;
 }
 
@@ -237,7 +228,6 @@ export function forestArena(): PC {
     pc.rect(x, 244 - h, 2, h, '#5c7a3e');
     pc.rect(x + 3, 244 - h + 2, 2, h - 2, '#476330');
   }
-  vignette(pc, 0.5);
   return pc;
 }
 
@@ -278,7 +268,6 @@ export function ruinsArena(): PC {
       x = nx; y = ny;
     }
   }
-  vignette(pc, 0.62);
   return pc;
 }
 
@@ -299,7 +288,6 @@ export function roadArena(): PC {
     pc.rect(420 - t * 40, y, 40 + t * 160, 1, c);
   }
   for (let x = 0; x < pc.w; x += 22) pc.rect(x, 226, 3, 8, '#241c14');
-  vignette(pc, 0.5);
   return pc;
 }
 
@@ -345,7 +333,6 @@ export function storyCrash(): PC {
     pc.rect(x, y, 1, 300 - y, '#0a0d16');
   }
   onlookers(pc, 120, 296);
-  vignette(pc, 0.6);
   return pc;
 }
 
@@ -380,7 +367,6 @@ export function storyVillage(): PC {
   pc.speckle(0, 300, pc.w, 60, '#6b5638', 0.25, 99);
   // crowd of villagers waiting on the road
   for (let k = 0; k < 9; k++) onlookers(pc, 60 + k * 62, 322, '#241a14');
-  vignette(pc, 0.45);
   return pc;
 }
 
@@ -411,7 +397,6 @@ export function storyGate(): PC {
   arenaFloor(pc, 258, ['#141024', '#1e1832', '#2a2142'], 107);
   pc.rect(240, 258, 160, 100, '#1a1430');
   onlookers(pc, 286, 300, '#0a0812');
-  vignette(pc, 0.62);
   return pc;
 }
 

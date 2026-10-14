@@ -98,6 +98,11 @@ separate settings storage. The title screen offers New Game / Continue / Setting
 **Presentation.** All art is drawn procedurally into textures at boot (`src/art/`), and all
 audio is synthesised with the Web Audio API (`src/audio/Audio.ts`) — Phaser's own audio is
 disabled (`audio: { noAudio: true }`) because the game supplies its own themes and SFX.
+Full-screen backdrops (`src/art/BackdropArt.ts`) get their depth from three flat silhouette
+layers and a single light source, not from corner vignetting: scattering ink pixels over the
+frame edges read as film grain rather than as 16-bit art. The title screen is a dawn over
+the Ashen Wood with the star already down — logo lockup high, menu a centred column on a
+panel frame — and every element is placed from the live stage, so it survives a window drag.
 
 ## Testing
 

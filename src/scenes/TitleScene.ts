@@ -1,6 +1,6 @@
 /**
- * Title screen: generated backdrop, the main menu, a save-slot picker, settings
- * and credits. The first key press unlocks the WebAudio context.
+ * Title screen: the dawn backdrop, the logo lockup, the main menu, a save-slot
+ * picker, settings and credits. The first key press unlocks the WebAudio context.
  */
 
 import Phaser from 'phaser';
@@ -26,6 +26,13 @@ const CREDITS = [
   'FOR THE WOOD THAT STILL BURNS.'
 ];
 
+/** Where the backdrop paints its star, in the 640x360 texture space. */
+const TITLE_STAR_X = 468;
+const TITLE_STAR_Y = 212;
+
+/** Line height shared by the main menu and the slot picker. */
+const MENU_ROW_H = 20;
+
 export class TitleScene extends Phaser.Scene {
   private pad!: KeyPad;
   private main!: MenuList;
@@ -36,7 +43,10 @@ export class TitleScene extends Phaser.Scene {
   private mode: Mode = 'main';
   private veil!: Phaser.GameObjects.Rectangle;
   private bg!: Phaser.GameObjects.Image;
-  private shade!: Phaser.GameObjects.Graphics;
+  private menuPanel!: Panel;
+  private sigil!: Phaser.GameObjects.Image;
+  private starGlow!: Phaser.GameObjects.Image;
+  private rule!: Phaser.GameObjects.Image;
   private titleL!: Label;
   private subL!: Label;
   private versionL!: Label;
@@ -49,34 +59,53 @@ export class TitleScene extends Phaser.Scene {
 
   create(): void {
     this.bg = this.add.image(0, 0, 'title').setOrigin(0, 0);
-    this.shade = this.add.graphics();
-    this.titleL = makeLabel(this, GAME_TITLE, 0, 0, { color: C.gold, align: 'center', scale: 3 });
-    this.subL = makeLabel(this, 'PART ONE OF THE ASHEN WOOD CYCLE', 0, 0, {
-      color: C.dim,
-      align: 'center'
+
+    // The backdrop's own star, twinkling where the art put it, and the sigil
+    // watermark the logo sits on. Both belong behind the menu panel.
+    this.starGlow = this.add
+      .image(0, 0, 'fx', 'spark')
+      .setTint(0xf0c04e)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.4);
+    this.tweens.add({
+      targets: this.starGlow,
+      alpha: 0.9,
+      duration: 1900,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.InOut'
     });
-    this.versionL = makeLabel(this, 'V1.0', 0, 0, { color: C.dark });
-    this.keysL = makeLabel(this, 'ARROWS MOVE   Z SELECT   X BACK', 0, 0, {
-      color: C.dark,
-      align: 'right'
+    this.sigil = this.add.image(0, 0, 'ui', 'sigil').setAlpha(0.14);
+    this.tweens.add({
+      targets: this.sigil,
+      alpha: 0.26,
+      duration: 3400,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.InOut'
     });
     this.addMotes();
 
+    // The menu sits on a panel frame so it keeps reading against the dawn ground.
+    this.menuPanel = new Panel(this, 0, 0, 216, 104);
+
     this.main = new MenuList({
       scene: this,
-      x: 44,
-      y: 266,
-      rowH: 20,
+      x: 0,
+      y: 0,
+      rowH: MENU_ROW_H,
+      align: 'center',
+      noteAlign: 'right',
       onConfirm: (_i, e) => this.chooseMain(e.label)
     });
     this.refreshMain();
 
     this.slots = new MenuList({
       scene: this,
-      x: 44,
-      y: 266,
-      rowH: 20,
-      noteX: 260,
+      x: 0,
+      y: 0,
+      rowH: MENU_ROW_H,
+      noteAlign: 'right',
       onConfirm: (_i, e) => this.chooseSlot(e.label)
     });
     this.slots.setVisible(false);
@@ -92,6 +121,19 @@ export class TitleScene extends Phaser.Scene {
     });
     this.creditsPanel.setVisible(false);
 
+    // The lockup draws over the panel, so it is built last but for the fade.
+    this.rule = this.add.image(0, 0, 'ui', 'divider');
+    this.titleL = makeLabel(this, GAME_TITLE, 0, 0, { color: C.gold, align: 'center', scale: 3 });
+    this.subL = makeLabel(this, 'PART ONE OF THE ASHEN WOOD CYCLE', 0, 0, {
+      color: C.dim,
+      align: 'center'
+    });
+    this.versionL = makeLabel(this, 'V1.0', 0, 0, { color: C.dark });
+    this.keysL = makeLabel(this, 'ARROWS MOVE   Z SELECT   X BACK', 0, 0, {
+      color: C.dark,
+      align: 'right'
+    });
+
     this.veil = this.add.rectangle(0, 0, 1, 1, 0x000000).setOrigin(0, 0).setAlpha(0);
 
     this.relayout();
@@ -106,41 +148,54 @@ export class TitleScene extends Phaser.Scene {
 
   /**
    * Everything on this screen is placed from the stage, so a window drag just
-   * re-runs it: the backdrop is scaled to cover, the menu stays pinned to the
-   * lower band, and the panels re-centre.
+   * re-runs it: the backdrop is scaled to cover, the lockup stays high and
+   * centred, and the menu panel keeps its place in the lower half.
    */
   private relayout(): void {
     const { w, h, cx } = stage;
     cover(this.bg, w, h);
 
-    const band = Math.round(h * 0.69);
-    this.shade.clear();
-    this.shade
-      .fillGradientStyle(0x0b0f1a, 0x0b0f1a, 0x000000, 0x000000, 0.7, 0.5, 0.55, 0.7)
-      .fillRect(0, band, w, h - band);
-
-    this.titleL.setScaleValue(w >= 520 ? 3 : 2);
-    const top = Math.max(28, Math.round(h * 0.15));
+    /* the lockup: sigil watermark, wordmark, rule, subtitle — high on the sky */
+    const scale = w >= 560 ? 3 : 2;
+    this.titleL.setScaleValue(scale);
+    const top = Math.max(14, Math.round(h * 0.12));
     this.titleL.setPosition(cx, top);
-    this.subL.setPosition(cx, top + 44);
-    this.versionL.setPosition(8, h - 22);
-    this.keysL.setPosition(w - 8, h - 22);
+    const titleH = this.titleL.metrics.h * scale;
+    this.sigil.setPosition(cx, top + Math.round(titleH / 2));
+    this.rule.setScale(w >= 520 ? 2 : 1);
+    this.rule.setPosition(cx, top + titleH + 14);
+    this.subL.setPosition(cx, top + titleH + 24);
 
-    const menuY = h - 94;
-    this.main.relayout(44, menuY);
-    this.slots.relayout(44, menuY, Math.min(260, w - 130));
+    /* the backdrop's star, mapped out of texture space through `cover` */
+    const s = this.bg.scaleX;
+    this.starGlow
+      .setPosition(this.bg.x + TITLE_STAR_X * s, this.bg.y + TITLE_STAR_Y * s)
+      .setScale(Math.max(2, Math.round(s * 3)));
+
+    /* the menu: a centred column on a panel frame in the lower half */
+    const slots = this.mode === 'slots';
+    const pw = Math.min(slots ? 400 : 264, w - 32);
+    const ph = Math.max(1, (slots ? this.slots : this.main).count) * MENU_ROW_H + 24;
+    const py = Math.max(110, Math.min(Math.round(h * 0.56), h - ph - 30));
+    const px = Math.round(cx - pw / 2);
+    this.menuPanel.place(px, py, pw, ph);
+    this.menuPanel.setVisible(!this.settings.open && !this.creditsPanel.visible);
+    this.main.relayout(cx, py + 16, px + pw - 12);
+    this.slots.relayout(px + 20, py + 16, px + pw - 12);
 
     this.settings.relayout(Math.max(8, cx - 150), Math.max(30, Math.round(h / 2 - 66)));
 
     const cw = Math.min(380, w - 40);
     const ch = 150;
-    const px = Math.round(cx - cw / 2);
-    const py = Math.round(h / 2 - ch / 2);
-    this.creditsPanel.place(px, py, cw, ch);
-    this.creditsLabels.forEach((l, i) => l.setPosition(cx, py + 16 + i * 12));
+    const bx = Math.round(cx - cw / 2);
+    const by = Math.round(h / 2 - ch / 2);
+    this.creditsPanel.place(bx, by, cw, ch);
+    this.creditsLabels.forEach((l, i) => l.setPosition(cx, by + 16 + i * 12));
 
+    this.versionL.setPosition(8, h - 22);
+    this.keysL.setPosition(w - 8, h - 22);
     this.veil.setSize(w, h);
-    this.scatterMotes();
+    this.scatterMotes(py - 12);
   }
 
   private addMotes(): void {
@@ -153,15 +208,18 @@ export class TitleScene extends Phaser.Scene {
       mote.setData('delay', Phaser.Math.Between(0, 3000));
       this.motes.push(mote);
     }
-    this.scatterMotes();
   }
 
-  /** Embers drift over the upper band; a resize re-scatters and re-tweens them. */
-  private scatterMotes(): void {
-    const bottom = Math.max(70, Math.round(stage.h * 0.66));
+  /**
+   * Embers drift over the sky band, down to just above the menu panel; a
+   * resize re-scatters and re-tweens them.
+   */
+  private scatterMotes(bottom: number): void {
+    const ceiling = 24;
+    const floor = Math.max(ceiling + 12, bottom);
     for (const m of this.motes) {
       const x = Phaser.Math.Between(20, Math.max(40, stage.w - 20));
-      const y = Phaser.Math.Between(40, bottom);
+      const y = Phaser.Math.Between(ceiling, floor);
       m.setPosition(x, y);
       (m.getData('tween') as Phaser.Tweens.Tween | undefined)?.stop();
       m.setData(
@@ -196,7 +254,7 @@ export class TitleScene extends Phaser.Scene {
         label: `SLOT ${i}`,
         enabled: !!meta,
         note: meta
-          ? `${meta.location.toUpperCase()} LV${Math.max(...meta.levels)} ${SaveManager.formatTime(meta.playtime)}`
+          ? `${meta.location.toUpperCase()} LV${SaveManager.topLevel(meta)} ${SaveManager.formatTime(meta.playtime)}`
           : 'EMPTY'
       }))
     );
@@ -214,12 +272,14 @@ export class TitleScene extends Phaser.Scene {
       this.refreshSlots();
       this.main.setVisible(false);
       this.slots.setVisible(true);
+      this.relayout();
       return;
     }
     if (label === 'SETTINGS') {
       this.mode = 'settings';
       this.main.setVisible(false);
       this.settings.setVisible(true);
+      this.relayout();
       return;
     }
     if (label === 'CREDITS') {
@@ -227,6 +287,7 @@ export class TitleScene extends Phaser.Scene {
       this.main.setVisible(false);
       this.creditsPanel.setVisible(true);
       this.creditsLabels.forEach((l) => l.setVisible(true));
+      this.relayout();
     }
   }
 
@@ -253,6 +314,7 @@ export class TitleScene extends Phaser.Scene {
     this.mode = 'main';
     this.refreshMain();
     this.main.setVisible(true);
+    this.relayout();
   }
 
   private leave(to: string): void {

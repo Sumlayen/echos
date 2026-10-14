@@ -6,7 +6,7 @@
 
 import Phaser from 'phaser';
 import { WINDOW_BORDER } from '../art/UIArt';
-import { Label, makeLabel } from './Text';
+import { Label, makeLabel, measure } from './Text';
 
 export const C = {
   text: 0xf2f5fb,
@@ -170,6 +170,13 @@ export interface MenuOptions {
   scale?: number;
   icon?: boolean;
   noteX?: number;
+  /**
+   * 'center' treats `x` as the middle of the column instead of its left edge —
+   * what a centred title menu wants. Notes and icons keep their own x.
+   */
+  align?: 'left' | 'center';
+  /** Which way a note leans on `noteX`; 'right' keeps it inside a narrow panel. */
+  noteAlign?: 'left' | 'right';
   onChange?: (index: number, entry: MenuEntry) => void;
   onConfirm?: (index: number, entry: MenuEntry) => void;
   /**
@@ -191,12 +198,16 @@ export class MenuList {
   private rowH: number;
   private padX: number;
   private noteX: number;
+  private align: 'left' | 'center';
+  private noteAlign: 'left' | 'right';
   private pinned = 0;
 
   constructor(private o: MenuOptions) {
     this.rowH = o.rowH ?? 14;
     this.padX = o.icon ? 16 : 0;
     this.noteX = o.noteX ?? o.x + 150;
+    this.align = o.align ?? 'left';
+    this.noteAlign = o.noteAlign ?? 'left';
     this.cursor = o.scene.add.image(o.x - 12, o.y + 3, 'ui', 'cursor_0');
     this.cursor.setOrigin(0, 0.5);
     if (o.depth !== undefined) this.cursor.setDepth(o.depth);
@@ -209,7 +220,7 @@ export class MenuList {
    */
   private runCursor(): void {
     this.cursorTween?.stop();
-    const x = this.o.x - 12;
+    const x = this.railX();
     this.cursor.setPosition(x, this.o.y + this.index * this.rowH + 3);
     this.cursorTween = this.o.scene.tweens.add({
       targets: this.cursor,
@@ -219,6 +230,16 @@ export class MenuList {
       repeat: -1,
       ease: 'Sine.InOut'
     });
+  }
+
+  /**
+   * The rail the cursor sits on: 12px left of the column, or clear of the
+   * widest entry when the column is centred on `x` instead of starting at it.
+   */
+  private railX(): number {
+    if (this.align !== 'center') return this.o.x - 12;
+    const widest = Math.max(0, ...this.items.map((i) => measure(i.label).w)) * (this.o.scale ?? 1);
+    return Math.round(this.o.x - widest / 2 - 12);
   }
 
   /**
@@ -272,14 +293,16 @@ export class MenuList {
       this.labels.push(
         makeLabel(this.o.scene, it.label, this.o.x + this.padX, y, {
           color: it.color ?? (enabled ? C.text : C.dark),
-          scale: this.o.scale ?? 1
+          scale: this.o.scale ?? 1,
+          align: this.align
         })
       );
       if (it.note) {
         this.notes.push(
           makeLabel(this.o.scene, it.note, this.noteX, y, {
             color: C.dim,
-            scale: this.o.scale ?? 1
+            scale: this.o.scale ?? 1,
+            align: this.noteAlign
           })
         );
       }
@@ -319,7 +342,7 @@ export class MenuList {
   private place(): void {
     const it = this.items[this.index];
     const y = this.o.y + this.index * this.rowH + 3;
-    this.cursor.setVisible(!!it).setPosition(this.o.x - 12, y);
+    this.cursor.setVisible(!!it).setPosition(this.railX(), y);
     this.labels.forEach((l, i) => {
       const e = this.items[i];
       l.setColor(e.color ?? (e.enabled === false ? C.dark : i === this.index ? 0xffffff : C.text));

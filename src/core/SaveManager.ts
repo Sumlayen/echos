@@ -118,6 +118,15 @@ export class SaveManager {
     for (let i = 0; i <= 3; i++) this.clear(i);
   }
 
+  /**
+   * Highest member level in a save, for the slot note. A save written before the
+   * party has members has no levels at all, and `Math.max()` of nothing would
+   * print `-Infinity` on the title screen.
+   */
+  static topLevel(meta: SaveMeta): number {
+    return meta.levels.length ? Math.max(...meta.levels) : 1;
+  }
+
   /** Seconds -> `hh:mm:ss`, used by the save menu. */
   static formatTime(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));

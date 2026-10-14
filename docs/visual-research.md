@@ -70,6 +70,10 @@ Cross-references seen while fetching (noted, not downloaded): Kenney *Pixel UI P
   toward indigo; torch light is an additive warm blob rather than re-tinted tiles.
 - Dithering is used **only** on large flat gradients (sky, water, lava glow) — never on
   sprite edges, which is what makes amateur 16-bit art look muddy.
+- **No corner vignetting.** Backdrops used to scatter `P.ink` pixels over their outer
+  55% radius; at the strengths in use that read as film grain rather than as 16-bit
+  art, so it was removed from every backdrop (title, arenas, story illustrations).
+  Depth comes from the three flat layers and the single light source alone.
 
 ### 3.4 Environment layering (from #11, #12, #13)
 - Terrain transitions are drawn as **explicit corner/edge tiles**, not random scatter.
