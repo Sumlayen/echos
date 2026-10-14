@@ -44,7 +44,15 @@ export class Panel extends Phaser.GameObjects.Container {
     scene.add.existing(this);
   }
 
+  /** New size for the frame; children stay where they are inside it. */
   resize(w: number, h: number): this {
+    this.skin.setSize(w, h);
+    return this;
+  }
+
+  /** Move and resize in one call — what a stage resize usually wants. */
+  place(x: number, y: number, w: number, h: number): this {
+    this.setPosition(x, y);
     this.skin.setSize(w, h);
     return this;
   }
@@ -115,6 +123,15 @@ export class Gauge extends Phaser.GameObjects.Container {
     return this;
   }
 
+  /** Move — and optionally resize — the bar without rebuilding it. */
+  place(x: number, y: number, w: number = this.gw, h: number = this.gh): this {
+    this.gw = w;
+    this.gh = h;
+    this.setPosition(x, y);
+    this.draw();
+    return this;
+  }
+
   private draw(): void {
     const g = this.g;
     const [dark, mid, light] = RAMPS[this.kind];
@@ -170,24 +187,66 @@ export class MenuList {
   private notes: Label[] = [];
   private icons: Phaser.GameObjects.Image[] = [];
   private cursor: Phaser.GameObjects.Image;
+  private cursorTween: Phaser.Tweens.Tween | null = null;
   private rowH: number;
   private padX: number;
+  private noteX: number;
   private pinned = 0;
 
   constructor(private o: MenuOptions) {
     this.rowH = o.rowH ?? 14;
     this.padX = o.icon ? 16 : 0;
+    this.noteX = o.noteX ?? o.x + 150;
     this.cursor = o.scene.add.image(o.x - 12, o.y + 3, 'ui', 'cursor_0');
     this.cursor.setOrigin(0, 0.5);
     if (o.depth !== undefined) this.cursor.setDepth(o.depth);
-    o.scene.tweens.add({
+    this.runCursor();
+  }
+
+  /**
+   * The little nudge the cursor plays. It is rebuilt (not just moved) whenever
+   * the list is re-laid-out, because the tween captured its start position.
+   */
+  private runCursor(): void {
+    this.cursorTween?.stop();
+    const x = this.o.x - 12;
+    this.cursor.setPosition(x, this.o.y + this.index * this.rowH + 3);
+    this.cursorTween = this.o.scene.tweens.add({
       targets: this.cursor,
-      x: this.cursor.x - 3,
+      x: x - 3,
       duration: 320,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.InOut'
     });
+  }
+
+  /**
+   * Move the list in place — cursor, labels, notes and icons — keeping the
+   * cursor index. Scenes call this when the stage resizes; rebuilding the list
+   * from scratch would throw away where the player was standing.
+   */
+  relayout(x: number, y: number, noteX?: number): this {
+    const dx = x - this.o.x;
+    const dy = y - this.o.y;
+    this.o.x = x;
+    this.o.y = y;
+    this.noteX = noteX ?? this.noteX + dx;
+    this.o.noteX = this.noteX;
+    for (const l of this.labels) {
+      l.x += dx;
+      l.y += dy;
+    }
+    for (const l of this.notes) {
+      l.x = this.noteX;
+      l.y += dy;
+    }
+    for (const ic of this.icons) {
+      ic.x += dx;
+      ic.y += dy;
+    }
+    this.runCursor();
+    return this;
   }
 
   get count(): number {
@@ -218,7 +277,7 @@ export class MenuList {
       );
       if (it.note) {
         this.notes.push(
-          makeLabel(this.o.scene, it.note, this.o.noteX ?? this.o.x + 150, y, {
+          makeLabel(this.o.scene, it.note, this.noteX, y, {
             color: C.dim,
             scale: this.o.scale ?? 1
           })
@@ -311,6 +370,7 @@ export class MenuList {
 
   destroy(): void {
     this.clear();
+    this.cursorTween?.stop();
     this.cursor.destroy();
   }
 }

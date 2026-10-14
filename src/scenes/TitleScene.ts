@@ -7,9 +7,10 @@ import Phaser from 'phaser';
 import { playTheme, sfx, unlockAudio } from '../audio/Audio';
 import { gs } from '../core/GameApp';
 import { SaveManager, saves } from '../core/SaveManager';
-import { GAME_TITLE, SCENES, TIMING, VIEW_H, VIEW_W } from '../config/constants';
+import { GAME_TITLE, SCENES, TIMING } from '../config/constants';
+import { cover, onStageResize, stage } from '../core/Stage';
 import { KeyPad } from '../ui/Keys';
-import { makeLabel } from '../ui/Text';
+import { Label, makeLabel } from '../ui/Text';
 import { SettingsForm } from '../ui/Settings';
 import { C, MenuList, Panel } from '../ui/Window';
 
@@ -31,32 +32,35 @@ export class TitleScene extends Phaser.Scene {
   private slots!: MenuList;
   private settings!: SettingsForm;
   private creditsPanel!: Panel;
-  private creditsLabels: ReturnType<typeof makeLabel>[] = [];
+  private creditsLabels: Label[] = [];
   private mode: Mode = 'main';
   private veil!: Phaser.GameObjects.Rectangle;
+  private bg!: Phaser.GameObjects.Image;
+  private shade!: Phaser.GameObjects.Graphics;
+  private titleL!: Label;
+  private subL!: Label;
+  private versionL!: Label;
+  private keysL!: Label;
+  private motes: Phaser.GameObjects.Image[] = [];
 
   constructor() {
     super(SCENES.title);
   }
 
   create(): void {
-    this.add.image(0, 0, 'title').setOrigin(0, 0);
-    this.addMotes();
-    this.add
-      .graphics()
-      .fillGradientStyle(0x0b0f1a, 0x0b0f1a, 0x000000, 0x000000, 0.7, 0.5, 0.55, 0.7)
-      .fillRect(0, 248, VIEW_W, VIEW_H - 248);
-
-    makeLabel(this, GAME_TITLE, VIEW_W / 2, 54, { color: C.gold, align: 'center', scale: 3 });
-    makeLabel(this, 'PART ONE OF THE ASHEN WOOD CYCLE', VIEW_W / 2, 98, {
+    this.bg = this.add.image(0, 0, 'title').setOrigin(0, 0);
+    this.shade = this.add.graphics();
+    this.titleL = makeLabel(this, GAME_TITLE, 0, 0, { color: C.gold, align: 'center', scale: 3 });
+    this.subL = makeLabel(this, 'PART ONE OF THE ASHEN WOOD CYCLE', 0, 0, {
       color: C.dim,
       align: 'center'
     });
-    makeLabel(this, 'V1.0', 8, VIEW_H - 14, { color: C.dark });
-    makeLabel(this, 'ARROWS MOVE   Z SELECT   X BACK', VIEW_W - 8, VIEW_H - 14, {
+    this.versionL = makeLabel(this, 'V1.0', 0, 0, { color: C.dark });
+    this.keysL = makeLabel(this, 'ARROWS MOVE   Z SELECT   X BACK', 0, 0, {
       color: C.dark,
       align: 'right'
     });
+    this.addMotes();
 
     this.main = new MenuList({
       scene: this,
@@ -77,21 +81,21 @@ export class TitleScene extends Phaser.Scene {
     });
     this.slots.setVisible(false);
 
-    this.settings = new SettingsForm(this, VIEW_W / 2 - 150, 118);
+    this.settings = new SettingsForm(this, 0, 0);
     this.settings.setVisible(false);
 
-    this.creditsPanel = new Panel(this, VIEW_W / 2 - 190, 108, 380, 150);
+    this.creditsPanel = new Panel(this, 0, 0, 380, 150);
     CREDITS.forEach((line, i) => {
-      const l = makeLabel(this, line, VIEW_W / 2, 124 + i * 12, {
-        color: i === 0 ? C.gold : C.text,
-        align: 'center'
-      });
+      const l = makeLabel(this, line, 0, 0, { color: i === 0 ? C.gold : C.text, align: 'center' });
       l.setVisible(false);
       this.creditsLabels.push(l);
     });
     this.creditsPanel.setVisible(false);
 
-    this.veil = this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x000000).setOrigin(0, 0).setAlpha(0);
+    this.veil = this.add.rectangle(0, 0, 1, 1, 0x000000).setOrigin(0, 0).setAlpha(0);
+
+    this.relayout();
+    onStageResize(this, () => this.relayout());
 
     this.pad = new KeyPad(this);
     this.pad.onAnyKey(() => {
@@ -100,22 +104,79 @@ export class TitleScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Everything on this screen is placed from the stage, so a window drag just
+   * re-runs it: the backdrop is scaled to cover, the menu stays pinned to the
+   * lower band, and the panels re-centre.
+   */
+  private relayout(): void {
+    const { w, h, cx } = stage;
+    cover(this.bg, w, h);
+
+    const band = Math.round(h * 0.69);
+    this.shade.clear();
+    this.shade
+      .fillGradientStyle(0x0b0f1a, 0x0b0f1a, 0x000000, 0x000000, 0.7, 0.5, 0.55, 0.7)
+      .fillRect(0, band, w, h - band);
+
+    this.titleL.setScaleValue(w >= 520 ? 3 : 2);
+    const top = Math.max(28, Math.round(h * 0.15));
+    this.titleL.setPosition(cx, top);
+    this.subL.setPosition(cx, top + 44);
+    this.versionL.setPosition(8, h - 22);
+    this.keysL.setPosition(w - 8, h - 22);
+
+    const menuY = h - 94;
+    this.main.relayout(44, menuY);
+    this.slots.relayout(44, menuY, Math.min(260, w - 130));
+
+    this.settings.relayout(Math.max(8, cx - 150), Math.max(30, Math.round(h / 2 - 66)));
+
+    const cw = Math.min(380, w - 40);
+    const ch = 150;
+    const px = Math.round(cx - cw / 2);
+    const py = Math.round(h / 2 - ch / 2);
+    this.creditsPanel.place(px, py, cw, ch);
+    this.creditsLabels.forEach((l, i) => l.setPosition(cx, py + 16 + i * 12));
+
+    this.veil.setSize(w, h);
+    this.scatterMotes();
+  }
+
   private addMotes(): void {
     for (let i = 0; i < 18; i++) {
-      const x = Phaser.Math.Between(20, VIEW_W - 20);
-      const y = Phaser.Math.Between(40, 240);
-      const mote = this.add.image(x, y, 'fx', i % 3 === 0 ? 'spark' : 'mote');
+      const mote = this.add.image(0, 0, 'fx', i % 3 === 0 ? 'spark' : 'mote');
       mote.setAlpha(0).setTint(i % 4 === 0 ? 0xf0c04e : 0x9fc4ff);
-      this.tweens.add({
-        targets: mote,
-        alpha: { from: 0, to: Phaser.Math.Between(4, 9) / 10 },
-        y: y - Phaser.Math.Between(10, 40),
-        duration: Phaser.Math.Between(2200, 5200),
-        delay: Phaser.Math.Between(0, 3000),
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.InOut'
-      });
+      mote.setData('drift', Phaser.Math.Between(10, 40));
+      mote.setData('glow', Phaser.Math.Between(4, 9) / 10);
+      mote.setData('dur', Phaser.Math.Between(2200, 5200));
+      mote.setData('delay', Phaser.Math.Between(0, 3000));
+      this.motes.push(mote);
+    }
+    this.scatterMotes();
+  }
+
+  /** Embers drift over the upper band; a resize re-scatters and re-tweens them. */
+  private scatterMotes(): void {
+    const bottom = Math.max(70, Math.round(stage.h * 0.66));
+    for (const m of this.motes) {
+      const x = Phaser.Math.Between(20, Math.max(40, stage.w - 20));
+      const y = Phaser.Math.Between(40, bottom);
+      m.setPosition(x, y);
+      (m.getData('tween') as Phaser.Tweens.Tween | undefined)?.stop();
+      m.setData(
+        'tween',
+        this.tweens.add({
+          targets: m,
+          alpha: { from: 0, to: m.getData('glow') as number },
+          y: y - (m.getData('drift') as number),
+          duration: m.getData('dur') as number,
+          delay: m.getData('delay') as number,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.InOut'
+        })
+      );
     }
   }
 

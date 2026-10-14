@@ -42,6 +42,7 @@ interface Row {
 
 export class SettingsForm {
   private panel: Panel;
+  private title: Label;
   private labels: Label[] = [];
   private rows: Row[];
   private cursor: Phaser.GameObjects.Image;
@@ -86,7 +87,7 @@ export class SettingsForm {
       }
     ];
 
-    makeLabel(scene, 'SETTINGS', x + 14, y + 10, { color: C.gold });
+    this.title = makeLabel(scene, 'SETTINGS', x + 14, y + 10, { color: C.gold });
     this.labels = this.rows.map((r, i) =>
       makeLabel(scene, r.name, x + 26, y + 34 + i * 17, { color: C.text })
     );
@@ -107,8 +108,24 @@ export class SettingsForm {
 
   setVisible(v: boolean): this {
     this.panel.setVisible(v);
+    this.title.setVisible(v);
     this.labels.forEach((l) => l.setVisible(v));
     this.cursor.setVisible(v);
+    return this;
+  }
+
+  /** Slide the whole form to a new anchor, keeping the selected row. */
+  relayout(x: number, y: number): this {
+    const dx = x - this.panel.x;
+    const dy = y - this.panel.y;
+    this.title.x += dx;
+    this.title.y += dy;
+    for (const l of this.labels) {
+      l.x += dx;
+      l.y += dy;
+    }
+    this.panel.setPosition(x, y);
+    this.paint();
     return this;
   }
 
@@ -128,6 +145,7 @@ export class SettingsForm {
 
   destroy(): void {
     this.panel.destroy();
+    this.title.destroy();
     this.labels.forEach((l) => l.destroy());
     this.cursor.destroy();
   }

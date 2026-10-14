@@ -517,6 +517,344 @@ check(
   JSON.stringify(closedAfterTabs)
 );
 
+/* ------------------------------------------------------- window resizing */
+
+/**
+ * The play area *is* the window: `Scale.RESIZE` keeps the canvas exactly as big
+ * as the viewport, `Stage` divides that by an integer zoom to get its layout
+ * space, and every scene re-flows on `stage:resize`. These checks resize the
+ * browser for real and read the geometry back — nothing may end up outside the
+ * play area, and nothing may lose its state on the way.
+ */
+const stageInfo = () =>
+  page.evaluate(() => {
+    const w = window;
+    const rect = (o) =>
+      !o
+        ? null
+        : {
+            x: Math.round(o.x - o.displayWidth * o.originX),
+            y: Math.round(o.y - o.displayHeight * o.originY),
+            w: Math.round(o.displayWidth),
+            h: Math.round(o.displayHeight)
+          };
+    const canvas = document.querySelector('#game-container canvas');
+    const world = w.game?.scene?.getScene('WorldScene');
+    const cam = world?.cameras?.main;
+    const camBounds = cam?._bounds ?? cam?.bounds;
+    const box = world?.box?.panel;
+    return {
+      win: { w: window.innerWidth, h: window.innerHeight },
+      stage: w.stage?.size ?? null,
+      map: world ? { w: world.mapW * 16, h: world.mapH * 16 } : null,
+      canvas: canvas ? { w: canvas.clientWidth, h: canvas.clientHeight } : null,
+      cam: cam
+        ? {
+            zoom: cam.zoom,
+            w: cam.width,
+            h: cam.height,
+            bw: camBounds?.width ?? 0,
+            bh: camBounds?.height ?? 0
+          }
+        : null,
+      hint: rect(world?.hudHint),
+      quest: rect(world?.questLabel),
+      // A scene started between two resizes used to keep Phaser's 1x camera and
+      // draw its UI at half size in the corner of the window.
+      zooms: (w.game?.scene?.getScenes(true) ?? []).flatMap((sc) =>
+        sc.cameras.cameras.map((c) => c.zoom)
+      ),
+      // What each live camera actually looks at: the world coordinates behind the
+      // canvas corners, plus the rect it culls against. A camera that is zoomed
+      // but not re-centred sees a different patch of world through those corners,
+      // and one whose cull rect disagrees with its view drops visible objects.
+      frames: (w.game?.scene?.getScenes(true) ?? []).flatMap((sc) =>
+        sc.cameras.cameras.map((c) => {
+          const tl = c.getWorldPoint(0, 0);
+          const br = c.getWorldPoint(c.width, c.height);
+          return {
+            scene: sc.scene.key,
+            follow: !!c._follow,
+            tl: { x: Math.round(tl.x), y: Math.round(tl.y) },
+            br: { x: Math.round(br.x), y: Math.round(br.y) },
+            view: {
+              x: Math.round(c.worldView.x),
+              y: Math.round(c.worldView.y),
+              w: Math.round(c.worldView.width),
+              h: Math.round(c.worldView.height)
+            }
+          };
+        })
+      ),
+      // Pinned UI is measured where it is drawn rather than where it is laid
+      // out: a camera that renders a `scrollFactor(0)` object outside the canvas
+      // hides the HUD while its layout coordinates still look perfectly placed.
+      pinned: (() => {
+        const bad = [];
+        let n = 0;
+        for (const sc of w.game?.scene?.getScenes(true) ?? []) {
+          const c = sc.cameras.main;
+          const m = c.matrix.matrix;
+          for (const o of sc.children.list) {
+            if (o.scrollFactorX !== 0 || o.scrollFactorY !== 0) continue;
+            n++;
+            const lx = o.x - o.displayWidth * o.originX - c.scrollX * o.scrollFactorX;
+            const ly = o.y - o.displayHeight * o.originY - c.scrollY * o.scrollFactorY;
+            const x = m[0] * lx + m[2] * ly + m[4];
+            const y = m[1] * lx + m[3] * ly + m[5];
+            const w2 = m[0] * o.displayWidth + m[2] * o.displayHeight;
+            const h2 = m[1] * o.displayWidth + m[3] * o.displayHeight;
+            if (x < -2 || y < -2 || x + w2 > c.width + 2 || y + h2 > c.height + 2) {
+              bad.push({ scene: sc.scene.key, type: o.constructor.name, x: Math.round(x), y: Math.round(y), w: Math.round(w2), h: Math.round(h2) });
+            }
+          }
+        }
+        return { n, bad };
+      })(),
+      // A map smaller than the window leaves a void around it, filled by the
+      // backdrop — which therefore has to be at least as big as the view.
+      backdrop: world?.backdrop && cam
+        ? {
+            covers:
+              world.backdrop.x <= cam.getWorldPoint(0, 0).x + 0.5 &&
+              world.backdrop.y <= cam.getWorldPoint(0, 0).y + 0.5 &&
+              world.backdrop.x + world.backdrop.width >= cam.getWorldPoint(cam.width, cam.height).x - 0.5 &&
+              world.backdrop.y + world.backdrop.height >= cam.getWorldPoint(cam.width, cam.height).y - 0.5
+          }
+        : null,
+      dialog: box
+        ? { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.skin.width), h: Math.round(box.skin.height) }
+        : null
+    };
+  });
+
+const fits = (r, s) =>
+  !!r && !!s && r.x >= -1 && r.y >= -1 && r.x + r.w <= s.w + 1 && r.y + r.h <= s.h + 1;
+
+const zoomOk = (info) =>
+  info.zooms.length > 0 && info.zooms.every((z) => z === info.stage.zoom);
+
+/**
+ * Every live camera must look through the canvas at exactly one stage of world,
+ * and cull against that same rect. A camera left at scroll (0,0) while zoomed
+ * looks at the middle of the world instead, painting the scene into one corner.
+ */
+const framedOk = (info) => {
+  const s = info.stage;
+  if (!s || !info.frames.length) return false;
+  return info.frames.every((f) => {
+    const spanX = Math.abs(f.br.x - f.tl.x);
+    const spanY = Math.abs(f.br.y - f.tl.y);
+    if (Math.abs(spanX - s.w) > 2 || Math.abs(spanY - s.h) > 2) return false;
+    if (Math.abs(f.view.w - spanX) > 2 || Math.abs(f.view.h - spanY) > 2) return false;
+    if (Math.abs(f.view.x - f.tl.x) > 2 || Math.abs(f.view.y - f.tl.y) > 2) return false;
+    if (!f.follow) return f.tl.x === 0 && f.tl.y === 0;
+    // Only the world camera roams, and only as far as the map: a view smaller
+    // than the map must stay inside it, a view larger than the map must cover it
+    // and sit centred rather than drift off one edge.
+    const map = info.map;
+    if (!map) return true;
+    const axis = (lo, hi, span, size) =>
+      span >= size + 1 ? lo <= 1 && hi >= size - 1 : lo >= -1 && hi <= size + 1;
+    return axis(f.tl.x, f.br.x, spanX, map.w) && axis(f.tl.y, f.br.y, spanY, map.h);
+  });
+};
+
+const resizeTo = async (width, height) => {
+  await page.setViewportSize({ width, height });
+  // ScaleManager polls the canvas' parent once per frame, then `Stage` re-measures.
+  await page.waitForTimeout(500);
+  return stageInfo();
+};
+
+const viewports = [
+  { w: 1440, h: 900 },
+  { w: 1920, h: 1080 },
+  { w: 960, h: 600 },
+  { w: 640, h: 360 },
+  { w: 480, h: 420 }
+];
+
+for (const vp of viewports) {
+  const info = await resizeTo(vp.w, vp.h);
+  const tag = `${vp.w}x${vp.h}`;
+  const zoom = info.stage?.zoom ?? 0;
+  const exact =
+    info.canvas?.w === info.win.w &&
+    info.canvas?.h === info.win.h &&
+    Number.isInteger(zoom) &&
+    zoom >= 1 &&
+    info.win.w - info.stage.w * zoom < zoom &&
+    info.win.h - info.stage.h * zoom < zoom;
+  check(
+    `canvas fills the window at ${tag}`,
+    exact,
+    JSON.stringify({ win: info.win, canvas: info.canvas, stage: info.stage })
+  );
+  check(
+    `camera view equals the layout space at ${tag}`,
+    Math.abs(info.cam.w / info.stage.w - zoom) < 0.01 && Math.abs(info.cam.h / info.stage.h - zoom) < 0.01,
+    JSON.stringify({ cam: info.cam, stage: info.stage })
+  );
+  check(
+    `camera bounds never smaller than the view at ${tag}`,
+    info.cam.bw >= info.stage.w - 1 && info.cam.bh >= info.stage.h - 1,
+    JSON.stringify(info.cam)
+  );
+  check(
+    `every running scene draws at the stage zoom at ${tag}`,
+    zoomOk(info),
+    JSON.stringify({ zooms: info.zooms, stage: info.stage })
+  );
+  check(
+    `cameras frame the layout space at ${tag}`,
+    framedOk(info),
+    JSON.stringify({ frames: info.frames, stage: info.stage })
+  );
+  check(
+    `world HUD stays inside the stage at ${tag}`,
+    fits(info.hint, info.stage) && fits(info.quest, info.stage) && fits(info.dialog, info.stage),
+    JSON.stringify({ hint: info.hint, quest: info.quest, dialog: info.dialog, stage: info.stage })
+  );
+  check(
+    `pinned HUD is drawn on the canvas at ${tag}`,
+    info.pinned.n > 0 && info.pinned.bad.length === 0,
+    JSON.stringify({ pinned: info.pinned, cam: info.cam, stage: info.stage })
+  );
+  check(
+    `backdrop covers the view at ${tag}`,
+    !!info.backdrop && info.backdrop.covers,
+    JSON.stringify({ backdrop: info.backdrop, cam: info.cam })
+  );
+  if (vp.w === 1920 || vp.w === 480) await shot(`25-world-${tag}`);
+}
+
+/* ------------------------------------ battle re-flows without losing state */
+
+const battleGeo = () =>
+  page.evaluate(() => {
+    const s = window.game?.scene?.getScene('BattleScene');
+    const L = s?.L;
+    return {
+      mode: s?.mode ?? null,
+      cursor: s?.cmd?.index ?? -1,
+      panels: L ? [L.party, L.log, L.cmd].map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h })) : [],
+      homes: (s?.order ?? []).map((v) => ({ x: v.home.x, y: v.home.y }))
+    };
+  });
+
+await buffParty();
+await forceBattle({ foes: ['wolf'], backdrop: 'arena_forest', flee: true }, { returnTo: 'WorldScene' });
+
+let menuUp = false;
+for (let i = 0; i < 40 && !menuUp; i++) {
+  menuUp = (await battleGeo()).mode === 'main';
+  if (!menuUp) await page.waitForTimeout(200);
+}
+const battleBefore = await battleGeo();
+const wide = await resizeTo(1600, 1000);
+const battleWide = await battleGeo();
+check('battle command menu was open before resizing', battleBefore.mode === 'main', String(battleBefore.mode));
+check(
+  'battle panels and sprites stay inside the stage at 1600x1000',
+  battleWide.panels.every((p) => fits(p, wide.stage)) &&
+    battleWide.homes.every((p) => p.x > 0 && p.x < wide.stage.w && p.y > 0 && p.y < wide.stage.h),
+  JSON.stringify({ panels: battleWide.panels, homes: battleWide.homes, stage: wide.stage })
+);
+check(
+  'battle cursor survives the resize',
+  battleWide.mode === 'main' && battleWide.cursor === battleBefore.cursor,
+  JSON.stringify({ before: battleBefore.cursor, after: battleWide.cursor })
+);
+check(
+  'battle scene draws at the stage zoom at 1600x1000',
+  zoomOk(wide),
+  JSON.stringify({ zooms: wide.zooms, stage: wide.stage })
+);
+check(
+  'battle camera frames the layout space at 1600x1000',
+  framedOk(wide),
+  JSON.stringify({ frames: wide.frames, stage: wide.stage })
+);
+await shot('26-battle-1600x1000');
+
+const tight = await resizeTo(520, 430);
+const battleTight = await battleGeo();
+check(
+  'battle panels and sprites stay inside the stage at 520x430',
+  battleTight.panels.every((p) => fits(p, tight.stage)) &&
+    battleTight.homes.every((p) => p.x > 0 && p.x < tight.stage.w && p.y > 0 && p.y < tight.stage.h),
+  JSON.stringify({ panels: battleTight.panels, homes: battleTight.homes, stage: tight.stage })
+);
+await shot('27-battle-520x430');
+
+const driven = await driveBattle('resized-battle');
+check(
+  'battle still finishes after all that resizing',
+  driven.ok,
+  JSON.stringify({ reason: driven.reason, trace: driven.trace.slice(-4) })
+);
+
+/* ---------------------------------------- menu re-flows without losing state */
+
+const menuProbe = () =>
+  page.evaluate(() => {
+    const o = window.game?.scene?.getScene('OverlayScene');
+    const p = o?.panel;
+    return {
+      tab: o?.tab ?? null,
+      cursor: o?.list?.index ?? -1,
+      panel: p
+        ? { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(p.skin.width), h: Math.round(p.skin.height) }
+        : null,
+      note: o?.note ? { x: Math.round(o.note.x), y: Math.round(o.note.y) } : null
+    };
+  });
+
+await resizeTo(1280, 860);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+await tap('ArrowRight');
+await tap('ArrowDown');
+await tap('ArrowDown');
+const menuBefore = await menuProbe();
+const menuStage = await stageInfo();
+const shrunk = await resizeTo(700, 520);
+const menuAfter = await menuProbe();
+check(
+  'menu tab and cursor survive a resize',
+  menuAfter.tab === menuBefore.tab && menuAfter.cursor === menuBefore.cursor,
+  JSON.stringify({ before: menuBefore, after: menuAfter })
+);
+check(
+  'menu overlay draws at the stage zoom at 1280x860',
+  zoomOk(menuStage),
+  JSON.stringify({ zooms: menuStage.zooms, stage: menuStage.stage })
+);
+check(
+  'menu camera frames the layout space at 1280x860',
+  framedOk(menuStage),
+  JSON.stringify({ frames: menuStage.frames, stage: menuStage.stage })
+);
+check(
+  'menu overlay is drawn on the canvas at 1280x860',
+  menuStage.pinned.n > 0 && menuStage.pinned.bad.length === 0,
+  JSON.stringify(menuStage.pinned)
+);
+check(
+  'menu camera frames the layout space at 700x520',
+  framedOk(shrunk),
+  JSON.stringify({ frames: shrunk.frames, stage: shrunk.stage })
+);
+check(
+  'menu frame stays inside the stage at 700x520',
+  fits(menuAfter.panel, shrunk.stage) && menuAfter.note.x <= shrunk.stage.w && menuAfter.note.y <= shrunk.stage.h,
+  JSON.stringify({ panel: menuAfter.panel, note: menuAfter.note, stage: shrunk.stage })
+);
+await shot('28-menu-700x520');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+
 const bootError = await page.evaluate(() => {
   const el = document.getElementById('boot-error');
   return el && el.style.display === 'flex' ? el.textContent : null;

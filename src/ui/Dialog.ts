@@ -98,6 +98,42 @@ export class DialogBox {
     return this;
   }
 
+  /**
+   * Re-flow the box for a new stage size: move the frame, re-wrap the running
+   * text into the new width and keep the typewriter exactly where it was.
+   */
+  relayout(x: number, y: number, w: number, h: number): this {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.panel.place(x, y, w, h);
+    this.nameL.setPosition(x + 14, y + 8);
+    this.prompt.setPosition(x + w - 16, y + h - 12);
+
+    const speaker = this.nameL.readable;
+    for (const l of this.lines) l.destroy();
+    this.lines = [];
+    this.starts = [];
+    let offset = 0;
+    wrap(this.full, w - 28).forEach((line, i) => {
+      this.starts.push(offset);
+      offset += line.length + 1;
+      this.lines.push(
+        makeLabel(this.scene, line, x + 14, y + (speaker ? 24 : 12) + i * 11, { color: C.text })
+      );
+    });
+    this.paint();
+
+    if (this.choices) {
+      const at = this.choices.index;
+      this.choices.relayout(x + 22, y + h + 6);
+      this.choices.setIndex(at);
+    }
+    if (this.pinned) this.pin(this.pinned);
+    return this;
+  }
+
   /** Drives the typewriter; call from the scene's update(). */
   tick(delta: number): this {
     if (!this.typing()) return this;

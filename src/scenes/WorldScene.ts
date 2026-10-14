@@ -14,7 +14,8 @@ import { gs } from '../core/GameApp';
 import { bus } from '../core/EventBus';
 import type { PartyMember } from '../core/GameState';
 import { session } from '../core/Session';
-import { SCENES, TIMING, VIEW_H, VIEW_W } from '../config/constants';
+import { onStageResize, stage } from '../core/Stage';
+import { SCENES, TIMING } from '../config/constants';
 import { ITEMS } from '../data/Items';
 import { activeObjectives } from '../data/Quests';
 import { globalRng } from '../core/Rng';
@@ -58,6 +59,11 @@ interface HudRow {
 
 const FRAME_PREFIX: Record<Dir, 'd' | 'u' | 's'> = { down: 'd', up: 'u', left: 's', right: 's' };
 
+/** The camera background; the backdrop beyond the map fades back into it. */
+const VOID_RGB = 0x0b0f1a;
+/** How dark the far edge of that fade gets, 0 at the map edge. */
+const VOID_FADE = 0.9;
+
 export class WorldScene extends Phaser.Scene {
   private map!: MapDef;
   private mapW = 0;
@@ -76,8 +82,11 @@ export class WorldScene extends Phaser.Scene {
   private talk!: DialogueRuntime;
   private hudRows: HudRow[] = [];
   private questLabel!: Label;
+  private hudHint!: Label;
   private toasts: Toast[] = [];
   private veil!: Phaser.GameObjects.Rectangle;
+  private backdrop: Phaser.GameObjects.TileSprite | null = null;
+  private backdropFade: Phaser.GameObjects.Graphics | null = null;
   private overlayOpen = false;
   private transitioning = false;
   private offHandlers: (() => void)[] = [];
@@ -114,6 +123,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapH = mapHeight(this.map);
 
     this.add.image(0, 0, this.bakeTerrain()).setOrigin(0, 0).setDepth(-20);
+    this.buildBackdrop();
     this.buildLiquids();
     this.buildProps();
     this.buildNpcs();
@@ -129,15 +139,11 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(this.ty * TS + TS);
     this.player.setFlipX(this.facing === 'left');
 
-    const cam = this.cameras.main;
-    const bw = Math.max(this.mapW * TS, VIEW_W);
-    const bh = Math.max(this.mapH * TS, VIEW_H);
-    cam.setBounds((this.mapW * TS - bw) / 2, (this.mapH * TS - bh) / 2, bw, bh);
-    cam.setRoundPixels(true);
-    cam.startFollow(this.player, false, 0.16, 0.16);
-    cam.setBackgroundColor('#0b0f1a');
+    this.frameCamera();
+    this.cameras.main.startFollow(this.player, false, 0.16, 0.16);
+    this.cameras.main.setBackgroundColor(VOID_RGB);
 
-    this.box = new DialogBox(this, 24, VIEW_H - 96, VIEW_W - 48, 78);
+    this.box = new DialogBox(this, 24, stage.h - 96, stage.w - 48, 78);
     this.box.pin(800);
     this.box.setVisible(false);
     this.talk = new DialogueRuntime(this.box, state, {
@@ -151,11 +157,14 @@ export class WorldScene extends Phaser.Scene {
 
     this.buildHud();
     this.veil = this.add
-      .rectangle(0, 0, VIEW_W, VIEW_H, 0x000000)
+      .rectangle(0, 0, 1, 1, 0x000000)
       .setOrigin(0, 0)
       .setAlpha(0)
       .setScrollFactor(0)
       .setDepth(1000);
+
+    this.relayout();
+    onStageResize(this, () => this.relayout());
 
     this.pad = new KeyPad(this);
     playTheme(this.map.theme);
@@ -213,6 +222,33 @@ export class WorldScene extends Phaser.Scene {
     }
     this.textures.addCanvas(key, pc.canvas);
     return key;
+  }
+
+  /**
+   * Maps are small — 44x30 tiles at the very most — while the stage is the
+   * whole window, so a wide or short window looks past the map into the camera
+   * background. Rather than a hard black edge around the map, the ground the
+   * border ring sits on is tiled out to the edge of the camera bounds and faded
+   * back into that background, which reads as country running past the map and
+   * keeps the eye on the part of it that can be walked.
+   */
+  private buildBackdrop(): void {
+    const mat = this.map.outside;
+    const sheet = atlases.get('terrain');
+    if (!mat || !sheet) return;
+
+    // One tile is enough: mask 15 is the variant where the material continues on
+    // all four sides, so it carries no edge fringe and butts up against itself.
+    const key = `out_${mat}`;
+    if (!this.textures.exists(key)) {
+      const f = frameOf(sheet, `${mat}_15`);
+      const pc = new PC(TS, TS);
+      pc.blitRect(sheet.pc, f.x, f.y, TS, TS, 0, 0);
+      this.textures.addCanvas(key, pc.canvas);
+    }
+
+    this.backdrop = this.add.tileSprite(0, 0, 1, 1, key).setOrigin(0, 0).setDepth(-30);
+    this.backdropFade = this.add.graphics().setDepth(-29);
   }
 
   /** 1 = north, 2 = east, 4 = south, 8 = west neighbour shares the material. */
@@ -289,8 +325,8 @@ export class WorldScene extends Phaser.Scene {
       });
     });
 
-    this.questLabel = this.pin(makeLabel(this, '', VIEW_W - 8, 6, { color: C.dim, align: 'right' }), 702);
-    this.pin(hint(this, '[Z] ACT   [ESC] MENU', VIEW_W - 8, VIEW_H - 14), 702);
+    this.questLabel = this.pin(makeLabel(this, '', stage.w - 8, 6, { color: C.dim, align: 'right' }), 702);
+    this.hudHint = this.pin(hint(this, '[Z] ACT   [ESC] MENU', stage.w - 8, stage.h - 22), 702);
     this.refreshHud();
   }
 
@@ -302,6 +338,78 @@ export class WorldScene extends Phaser.Scene {
     obj.setScrollFactor(0);
     obj.setDepth(depth);
     return obj;
+  }
+
+  /**
+   * The camera window is the stage; the region it may roam is the map, but never
+   * smaller than the stage itself — a map smaller than the window sits centred in
+   * it instead of being pinned to a corner.
+   *
+   * Phaser clamps the scroll against the bounds for a camera centred on its
+   * origin, and `Stage` puts that origin at the top-left of the canvas, so the
+   * view would reach half the difference between the canvas and the layout space
+   * past the bounds. Pushing the bounds in by that much keeps the roam inside the
+   * region, which is what the backdrop is sized to.
+   */
+  private frameCamera(): void {
+    const cam = this.cameras.main;
+    const { w, h, zoom } = stage;
+    const rw = Math.max(this.mapW * TS, w);
+    const rh = Math.max(this.mapH * TS, h);
+    const rx = (this.mapW * TS - rw) / 2;
+    const ry = (this.mapH * TS - rh) / 2;
+    cam.setBounds(rx + (w * (zoom - 1)) / 2, ry + (h * (zoom - 1)) / 2, rw, rh);
+    // Follow lands the target in the middle of the window: the scroll is the
+    // world coordinate behind the canvas' top-left pixel, so the target has to be
+    // pushed by half the layout space to sit at its centre.
+    cam.setFollowOffset(w / 2, h / 2);
+    cam.setRoundPixels(true);
+    this.layoutBackdrop(rx, ry, rw, rh);
+  }
+
+  /**
+   * The backdrop and its fade cover the region the camera may roam, so no part
+   * of the view is ever left looking at bare background. Called from
+   * `frameCamera`, so it follows every resize.
+   */
+  private layoutBackdrop(bx: number, by: number, bw: number, bh: number): void {
+    if (!this.backdrop || !this.backdropFade) return;
+    const mw = this.mapW * TS;
+    const mh = this.mapH * TS;
+    this.backdrop.setPosition(bx, by).setSize(bw, bh);
+
+    const g = this.backdropFade;
+    g.clear();
+    // One band per side, clear against the map and darkest at the window edge;
+    // the corners take two bands and fall off fastest.
+    const band = (x: number, y: number, w: number, h: number, a: number[]): void => {
+      if (w <= 0 || h <= 0) return;
+      g.fillGradientStyle(VOID_RGB, VOID_RGB, VOID_RGB, VOID_RGB, a[0], a[1], a[2], a[3]);
+      g.fillRect(x, y, w, h);
+    };
+    band(bx, by, bw, -by, [VOID_FADE, VOID_FADE, 0, 0]);
+    band(bx, mh, bw, by + bh - mh, [0, 0, VOID_FADE, VOID_FADE]);
+    band(bx, by, -bx, bh, [VOID_FADE, 0, VOID_FADE, 0]);
+    band(mw, by, bx + bw - mw, bh, [0, VOID_FADE, 0, VOID_FADE]);
+  }
+
+  /**
+   * HUD, dialogue box and toasts are pinned to the camera, so they follow the
+   * window rather than the map. The box re-wraps in place: the line being typed
+   * survives a resize.
+   */
+  private relayout(): void {
+    const { w, h, cx } = stage;
+    this.frameCamera();
+
+    const bw = Math.min(w - 32, 900);
+    const bh = Math.min(78, Math.max(52, h - 40));
+    this.box.relayout(Math.round(cx - bw / 2), h - bh - 18, bw, bh);
+
+    this.veil.setSize(w, h);
+    this.questLabel.setPosition(w - 8, 6);
+    this.hudHint.setPosition(w - 8, h - 22);
+    this.toasts.forEach((t, i) => t.label.setPosition(cx, h - 30 - i * 12));
   }
 
   private refreshHud(): void {
@@ -619,7 +727,7 @@ export class WorldScene extends Phaser.Scene {
   /* -------------------------------------------------------------- toasts */
 
   private toast(text: string): void {
-    const label = makeLabel(this, text, VIEW_W / 2, VIEW_H - 30 - this.toasts.length * 12, {
+    const label = makeLabel(this, text, stage.cx, stage.h - 30 - this.toasts.length * 12, {
       color: C.text,
       align: 'center'
     });
