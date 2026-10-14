@@ -6,7 +6,7 @@
 | **Base** | `develop` at `8e5e2e5` (the `feat/full-window-stage` merge) |
 | **Commits** | `1133d07` — *Drop the dithered ink vignette from every backdrop*<br>`3501d7a` — *Frame the title menu and let the dawn backdrop stand*<br>plus the commit that adds this file (`git log --oneline notes/`) |
 | **Date** | 2026-10-14 |
-| **PR** | not opened — merged locally into `develop`, branch not pushed |
+| **PR** | [#2](https://github.com/Sumlayen/echos/pull/2) — `feat/intro-screen-clean-backdrops` → `develop` |
 
 ---
 
@@ -170,9 +170,12 @@ Screenshots the composition was judged from: `tmp_e2e/29-title-1920x1080.png`,
 
 ## Known limitations
 
-- **No PR exists.** The branch was merged locally into `develop` and
-  neither branch has been pushed; `origin/develop` trails behind. The
-  PR link in the header stays empty until the merge is published.
+- **The PR was opened after the merge.** The branch was merged into `develop`
+  locally first, then both were pushed; GitHub recorded `5bf2cf4` as the merge
+  commit of [#2](https://github.com/Sumlayen/echos/pull/2) and marked the PR
+  MERGED instead of producing its own merge commit. The PR diff therefore also
+  carries `feat/full-window-stage` (`1878c72`, merged at `8e5e2e5`), which had
+  never been pushed and still has no notes file of its own.
 - **The `-Infinity` guard is defensive, not reproduced.** `levels` is empty only
   when a save blob's `party` array is empty, which New Game never produces — it
   takes a hand-edited or truncated `localStorage` entry. No test covers it.
