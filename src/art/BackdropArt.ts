@@ -5,7 +5,9 @@
  * Rules that keep them reading as 16-bit rather than digital painting:
  *  - flat colour bands + checker dither instead of smooth gradients,
  *  - exactly three depth layers (sky / mid / near), each a flat silhouette,
- *  - one light source per image, always the star or the moon.
+ *  - one light source per image, always the star or the moon,
+ *  - no corner vignetting: depth comes from those layers, never from
+ *    scattering ink pixels over the frame edges.
  */
 
 import { P } from './Palette';
@@ -99,20 +101,6 @@ function glow(pc: PC, cx: number, cy: number, r: number, ramp: readonly string[]
   }
 }
 
-/** Dithered corner darkening so sprites and text pop against the backdrop. */
-function vignette(pc: PC, strength = 0.5): void {
-  const cx = pc.w / 2, cy = pc.h / 2;
-  const maxD = Math.sqrt(cx * cx + cy * cy);
-  for (let y = 0; y < pc.h; y++) {
-    for (let x = 0; x < pc.w; x++) {
-      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) / maxD;
-      if (d < 0.45) continue;
-      const t = Math.min(1, ((d - 0.45) / 0.55) * strength * 1.6);
-      if (PC.hash(x, y, 99) < t) pc.p(x, y, P.ink);
-    }
-  }
-}
-
 /* ------------------------------------------------------------- title card */
 
 export function titleBackdrop(): PC {
@@ -174,9 +162,6 @@ export function titleBackdrop(): PC {
   for (let x = 440; x < 620; x += 18) pc.rect(x, 312, 3, 18, roof);
   pc.rect(440, 318, 180, 3, roof);
   pc.rect(0, 330, pc.w, 30, '#05070d');
-  pc.speckle(0, 330, pc.w, 30, '#0d1220', 0.2, 17);
-
-  vignette(pc, 0.55);
   return pc;
 }
 
@@ -237,7 +222,6 @@ export function forestArena(): PC {
     pc.rect(x, 244 - h, 2, h, '#5c7a3e');
     pc.rect(x + 3, 244 - h + 2, 2, h - 2, '#476330');
   }
-  vignette(pc, 0.5);
   return pc;
 }
 
@@ -278,7 +262,6 @@ export function ruinsArena(): PC {
       x = nx; y = ny;
     }
   }
-  vignette(pc, 0.62);
   return pc;
 }
 
@@ -299,7 +282,6 @@ export function roadArena(): PC {
     pc.rect(420 - t * 40, y, 40 + t * 160, 1, c);
   }
   for (let x = 0; x < pc.w; x += 22) pc.rect(x, 226, 3, 8, '#241c14');
-  vignette(pc, 0.5);
   return pc;
 }
 
@@ -345,7 +327,6 @@ export function storyCrash(): PC {
     pc.rect(x, y, 1, 300 - y, '#0a0d16');
   }
   onlookers(pc, 120, 296);
-  vignette(pc, 0.6);
   return pc;
 }
 
@@ -380,7 +361,6 @@ export function storyVillage(): PC {
   pc.speckle(0, 300, pc.w, 60, '#6b5638', 0.25, 99);
   // crowd of villagers waiting on the road
   for (let k = 0; k < 9; k++) onlookers(pc, 60 + k * 62, 322, '#241a14');
-  vignette(pc, 0.45);
   return pc;
 }
 
@@ -411,7 +391,6 @@ export function storyGate(): PC {
   arenaFloor(pc, 258, ['#141024', '#1e1832', '#2a2142'], 107);
   pc.rect(240, 258, 160, 100, '#1a1430');
   onlookers(pc, 286, 300, '#0a0812');
-  vignette(pc, 0.62);
   return pc;
 }
 
