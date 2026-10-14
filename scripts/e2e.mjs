@@ -855,6 +855,130 @@ await shot('28-menu-700x520');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(700);
 
+/* -------------------------------- title re-flows without losing the cursor */
+
+/**
+ * The title screen places every element from the live stage — backdrop, logo
+ * lockup, menu panel and the three sub-panels. A window drag must re-place them
+ * all without throwing away where the player is standing in the menu.
+ *
+ * A real save is written first so CONTINUE is live: the menu skips disabled
+ * entries, and the slot picker is the widest panel the title has to fit.
+ */
+await page.keyboard.press('Escape');
+await page.waitForTimeout(600);
+if ((await menuProbe()).tab) {
+  // The overlay remembers the last tab, so walk forward until SAVE is up.
+  for (let i = 0; i < 8 && (await menuProbe()).tab !== 'save'; i++) await tap('ArrowRight', 140);
+  await tap('z', 300);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(700);
+}
+
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(3500);
+
+const titleProbe = () =>
+  page.evaluate(() => {
+    const t = window.game?.scene?.getScene('TitleScene');
+    const frame = (p) =>
+      p
+        ? { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(p.skin.width), h: Math.round(p.skin.height) }
+        : null;
+    const bg = t?.bg;
+    const lock = t?.titleL;
+    return {
+      mode: t?.mode ?? null,
+      cursor: t?.main?.index ?? -1,
+      contLive: t?.main?.items?.[1]?.enabled ?? false,
+      panel: frame(t?.menuPanel),
+      credits: frame(t?.creditsPanel),
+      settings: frame(t?.settings?.panel),
+      lockup: lock
+        ? {
+            x: Math.round(lock.x - (lock.metrics.w * lock.scaleX) / 2),
+            y: Math.round(lock.y),
+            w: Math.round(lock.metrics.w * lock.scaleX),
+            h: Math.round(lock.metrics.h * lock.scaleY)
+          }
+        : null,
+      backdrop: bg
+        ? {
+            x: Math.round(bg.x),
+            y: Math.round(bg.y),
+            w: Math.round(bg.width * bg.scaleX),
+            h: Math.round(bg.height * bg.scaleY)
+          }
+        : null
+    };
+  });
+
+const coversStage = (b, s) =>
+  !!b && !!s && b.x <= 0 && b.y <= 0 && b.x + b.w >= s.w - 1 && b.y + b.h >= s.h - 1;
+
+for (const vp of [{ w: 1920, h: 1080 }, { w: 960, h: 600 }, { w: 640, h: 360 }, { w: 480, h: 420 }]) {
+  const info = await resizeTo(vp.w, vp.h);
+  const t = await titleProbe();
+  const tag = `${vp.w}x${vp.h}`;
+  check(
+    `title menu panel stays inside the stage at ${tag}`,
+    fits(t.panel, info.stage) && fits(t.lockup, info.stage),
+    JSON.stringify({ panel: t.panel, lockup: t.lockup, stage: info.stage })
+  );
+  check(
+    `title backdrop covers the view at ${tag}`,
+    coversStage(t.backdrop, info.stage),
+    JSON.stringify({ backdrop: t.backdrop, stage: info.stage })
+  );
+  if (vp.w === 1920 || vp.w === 480) await shot(`29-title-${tag}`);
+}
+
+const small = await resizeTo(520, 430);
+await tap('ArrowDown');
+const parkedAt = (await titleProbe()).cursor;
+await tap('Enter');
+await page.waitForTimeout(500);
+const slots = await titleProbe();
+check(
+  'title slot picker opens and fits the stage at 520x430',
+  slots.mode === 'slots' && fits(slots.panel, small.stage),
+  JSON.stringify({ mode: slots.mode, contLive: slots.contLive, panel: slots.panel, stage: small.stage })
+);
+await shot('29-title-slots-520x430');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(600);
+const back = await titleProbe();
+check(
+  'title menu keeps its cursor through the slot picker and a resize',
+  back.mode === 'main' && back.cursor === parkedAt && fits(back.panel, small.stage),
+  JSON.stringify({ mode: back.mode, cursor: back.cursor, parkedAt, panel: back.panel })
+);
+
+await tap('ArrowDown');
+await tap('Enter');
+await page.waitForTimeout(500);
+const settings = await titleProbe();
+check(
+  'title settings panel fits the stage at 520x430',
+  settings.mode === 'settings' && fits(settings.settings, small.stage),
+  JSON.stringify({ mode: settings.mode, panel: settings.settings, stage: small.stage })
+);
+await shot('29-title-settings-520x430');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(600);
+await tap('ArrowDown');
+await tap('Enter');
+await page.waitForTimeout(500);
+const credits = await titleProbe();
+check(
+  'title credits panel fits the stage at 520x430',
+  credits.mode === 'credits' && fits(credits.credits, small.stage),
+  JSON.stringify({ mode: credits.mode, panel: credits.credits, stage: small.stage })
+);
+await shot('29-title-credits-520x430');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(600);
+
 const bootError = await page.evaluate(() => {
   const el = document.getElementById('boot-error');
   return el && el.style.display === 'flex' ? el.textContent : null;
