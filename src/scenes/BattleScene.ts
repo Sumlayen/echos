@@ -39,6 +39,22 @@ interface UnitView {
   home: { x: number; y: number };
 }
 
+/**
+ * HP, MP and aliveness *as the player has seen them so far*.
+ *
+ * `BattleEngine.choose()` resolves an entire round in one synchronous call and
+ * hands back the events, so the live `BattleUnit` is already at its end-of-round
+ * values while the first event is still waiting in `pending`. Painting those
+ * live values makes the party bar drop the instant ATTACK is committed — before
+ * a single foe has moved — which reads exactly as "my attack hit myself".
+ * Events advance this map one step at a time; `snapShown()` reconciles it.
+ */
+interface ShownState {
+  hp: number;
+  mp: number;
+  alive: boolean;
+}
+
 interface PartyRow {
   unit: BattleUnit;
   name: Label;
@@ -110,12 +126,17 @@ function battleLayout(w: number, h: number, partyCount: number): BattleLayout {
   };
 }
 
-/** Log lines kept on screen. */
-const LOG_LINES = 4;
+/** Log line pitch and how many lines the band can carry. */
+const LOG_LINE_H = 11;
+const LOG_LINES_MIN = 3;
+const LOG_LINES_MAX = 6;
 
 export class BattleScene extends Phaser.Scene {
   private engine!: BattleEngine;
   private views = new Map<string, UnitView>();
+  private shown = new Map<string, ShownState>();
+  /** Units with a floating number still on screen, so they can be staggered. */
+  private floats = new Map<string, number>();
   private order: UnitView[] = [];
   private rows: PartyRow[] = [];
   private pad!: KeyPad;
@@ -170,6 +191,8 @@ export class BattleScene extends Phaser.Scene {
         ? SCENES.story
         : SCENES.world;
     this.views = new Map();
+    this.shown = new Map();
+    this.floats = new Map();
     this.order = [];
     this.rows = [];
     this.history = [];
@@ -224,6 +247,9 @@ export class BattleScene extends Phaser.Scene {
     this.events.once('shutdown', () => this.pad?.destroy());
     playTheme(this.engine.foes.some((f) => f.boss) ? 'boss' : 'battle');
 
+    // Seed the displayed numbers before the engine resolves anything, so the
+    // first event of the queue animates from what the player is already seeing.
+    this.seedShown();
     this.pending = this.engine.start();
     this.refreshAll();
   }
@@ -433,17 +459,26 @@ export class BattleScene extends Phaser.Scene {
     this.paintLog();
   }
 
+  /** How many log lines the band can carry at its current height. */
+  private logLines(): number {
+    return Math.max(
+      LOG_LINES_MIN,
+      Math.min(LOG_LINES_MAX, Math.floor((this.L.log.h - 18) / LOG_LINE_H))
+    );
+  }
+
   private paintLog(): void {
     this.logLabels.forEach((l) => l.destroy());
     this.logLabels = [];
+    const keep = this.logLines();
     const lines: string[] = [];
-    for (const entry of this.history.slice(-LOG_LINES)) {
+    for (const entry of this.history.slice(-keep)) {
       lines.push(...wrap(entry, this.L.log.w - 24).slice(-2));
     }
-    const shown = lines.slice(-LOG_LINES);
+    const shown = lines.slice(-keep);
     shown.forEach((line, i) => {
       this.logLabels.push(
-        makeLabel(this, line, this.L.log.x + 12, this.L.log.y + 12 + i * 11, {
+        makeLabel(this, line, this.L.log.x + 12, this.L.log.y + 12 + i * LOG_LINE_H, {
           color: i === shown.length - 1 ? C.text : C.dim
         }).setDepth(501)
       );
@@ -455,18 +490,97 @@ export class BattleScene extends Phaser.Scene {
   private refreshAll(): void {
     for (const row of this.rows) {
       const u = row.unit;
-      row.hp.set(u.maxHp > 0 ? u.hp / u.maxHp : 0, true);
-      row.mp.set(u.maxMp > 0 ? u.mp / u.maxMp : 0, true);
-      row.hpText.setText(`${u.hp}/${u.maxHp}`);
-      row.mpText.setText(`${u.mp}/${u.maxMp}`);
-      row.name.setColor(u.alive ? (u === this.actor ? C.gold : C.text) : C.hpLow);
+      const s = this.shownOf(u);
+      row.hp.set(u.maxHp > 0 ? s.hp / u.maxHp : 0, true);
+      row.mp.set(u.maxMp > 0 ? s.mp / u.maxMp : 0, true);
+      row.hpText.setText(`${s.hp}/${u.maxHp}`);
+      row.mpText.setText(`${s.mp}/${u.maxMp}`);
+      row.name.setColor(s.alive ? (u === this.actor ? C.gold : C.text) : C.hpLow);
     }
     for (const v of this.order) {
-      if (v.gauge) v.gauge.set(v.unit.maxHp > 0 ? v.unit.hp / v.unit.maxHp : 0, true);
-      if (v.name) v.name.setColor(v.unit.alive ? C.text : C.dark);
+      const s = this.shownOf(v.unit);
+      if (v.gauge) v.gauge.set(v.unit.maxHp > 0 ? s.hp / v.unit.maxHp : 0, true);
+      if (v.name) v.name.setColor(s.alive ? C.text : C.dark);
       this.paintTags(v);
     }
     this.roundLabel.setText(`ROUND ${Math.max(1, this.engine.round)}`);
+  }
+
+  /** Start the displayed numbers from full, before the engine resolves a turn. */
+  private seedShown(): void {
+    this.shown.clear();
+    for (const u of [...this.engine.party, ...this.engine.foes]) {
+      this.shown.set(u.uid, { hp: u.hp, mp: u.mp, alive: u.alive });
+    }
+  }
+
+  private shownOf(u: BattleUnit): ShownState {
+    let s = this.shown.get(u.uid);
+    if (!s) {
+      s = { hp: u.hp, mp: u.mp, alive: u.alive };
+      this.shown.set(u.uid, s);
+    }
+    return s;
+  }
+
+  /**
+   * Reconcile the displayed numbers with the model once the queue is empty.
+   * Anything an event does not describe — a boss phase swap, a late bonus —
+   * self-heals here rather than leaving a bar stuck behind the truth.
+   */
+  private snapShown(): void {
+    for (const u of [...this.engine.party, ...this.engine.foes]) {
+      const s = this.shown.get(u.uid);
+      if (s) {
+        s.hp = u.hp;
+        s.mp = u.mp;
+        s.alive = u.alive;
+      }
+    }
+  }
+
+  /**
+   * Move the displayed numbers in step with the event being animated. A `hit`
+   * event is the only thing allowed to lower a bar: the model has already run
+   * the whole round, so skipping this would paint the end state up front.
+   */
+  private applyShown(e: BattleEvent): void {
+    switch (e.t) {
+      case 'use': {
+        const s = this.shown.get(e.uid);
+        if (s && e.mp !== undefined) s.mp = e.mp;
+        break;
+      }
+      case 'hit': {
+        // A miss carries damage 0, so it correctly changes nothing.
+        const s = this.shown.get(e.to);
+        if (s) s.hp = Math.max(0, s.hp - e.damage);
+        break;
+      }
+      case 'heal': {
+        const s = this.shown.get(e.to);
+        if (s) s.hp = Math.min(this.engine.unit(e.to)?.maxHp ?? s.hp, s.hp + e.amount);
+        break;
+      }
+      case 'revive': {
+        const s = this.shown.get(e.uid);
+        if (s) {
+          s.hp = e.hp;
+          s.alive = true;
+        }
+        break;
+      }
+      case 'death': {
+        const s = this.shown.get(e.uid);
+        if (s) {
+          s.hp = 0;
+          s.alive = false;
+        }
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   /** Small status icons under each sprite. */
@@ -531,6 +645,8 @@ export class BattleScene extends Phaser.Scene {
   /* ----------------------------------------------------------- command menu */
 
   private afterEvents(): void {
+    // Nothing is left to animate, so the view and the model must now agree.
+    this.snapShown();
     if (this.engine.outcome !== 'ongoing') return;
     const actor = this.engine.awaitingInput();
     if (!actor) return;
@@ -539,7 +655,8 @@ export class BattleScene extends Phaser.Scene {
 
   private openMenuFor(actor: BattleUnit): void {
     this.actor = actor;
-    this.actorLabel.setText(`${actor.name.toUpperCase()} ${actor.hp}/${actor.maxHp} ${actor.mp}/${actor.maxMp}`);
+    const s = this.shownOf(actor);
+    this.actorLabel.setText(`${actor.name.toUpperCase()} ${s.hp}/${actor.maxHp} ${s.mp}/${actor.maxMp}`);
     this.openMain();
     this.refreshAll();
   }
@@ -632,11 +749,17 @@ export class BattleScene extends Phaser.Scene {
       this.pendingAction = action;
       this.setMenu(
         'target',
-        pool.map((t) => ({
-          label: this.short(t.name),
-          note: `${t.hp}/${t.maxHp}`,
-          color: t.alive ? C.text : C.dark
-        })),
+        // Read the displayed numbers, not the model: the whole HUD has one
+        // source of truth, so a target list can never show HP that has not
+        // finished animating away.
+        pool.map((t) => {
+          const s = this.shownOf(t);
+          return {
+            label: this.short(t.name),
+            note: `${s.hp}/${t.maxHp}`,
+            color: s.alive ? C.text : C.dark
+          };
+        }),
         pool.map((t) => t.uid)
       );
       return;
@@ -666,6 +789,7 @@ export class BattleScene extends Phaser.Scene {
   /* -------------------------------------------------------- event playback */
 
   private play(e: BattleEvent): void {
+    this.applyShown(e);
     switch (e.t) {
       case 'round':
         this.log(`ROUND ${e.round}`);
@@ -765,7 +889,10 @@ export class BattleScene extends Phaser.Scene {
     const wanted = kind === 'mag' && element ? `orb_${element}` : kind === 'item' ? 'impact' : 'slash';
     this.fxAt(uid, this.fxKey(wanted) ? wanted : 'impact');
     this.flash(v);
-    this.float(v, String(damage), crit ? C.gold : C.text);
+    this.float(v, String(damage), crit ? C.gold : C.hp);
+    // The number belongs in the log as well: a plain hit otherwise leaves no
+    // trace, and the only bar that visibly moves is the party's own.
+    this.log(`${this.nameOf(uid)} takes ${damage}.`);
     sfx(crit ? 'crit' : 'hit');
     if (crit) this.shakeScreen();
     this.hold = crit ? 520 : 420;
@@ -775,6 +902,7 @@ export class BattleScene extends Phaser.Scene {
     const v = this.views.get(uid);
     this.fxAt(uid, 'heal');
     if (v) this.float(v, `+${amount}`, C.ok);
+    this.log(`${this.nameOf(uid)} recovers ${amount}.`);
     sfx('heal');
     this.hold = 380;
   }
@@ -883,18 +1011,42 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * A number that pops over a unit, rises and fades. Foes carry a name plate at
+   * `y - 48` and an HP gauge at `y - 38`, so their numbers clear both instead of
+   * landing on top of the name. Concurrent numbers on one unit fan out sideways
+   * so a multi-hit skill stays readable.
+   */
   private float(v: UnitView, text: string, color: number): void {
-    const label = makeLabel(this, text, v.home.x, v.home.y - 42, {
-      color,
-      align: 'center'
-    }).setDepth(600);
+    const uid = v.unit.uid;
+    const n = this.floats.get(uid) ?? 0;
+    this.floats.set(uid, n + 1);
+
+    // 0, -10, +10, -20, +20 ... around the sprite.
+    const step = Math.ceil((n + 1) / 2);
+    const x = v.home.x + (n % 2 === 0 ? step - 1 : -step) * 10;
+    const y = v.home.y - (v.unit.side === 'foe' ? 62 : 44);
+
+    const shadow = makeLabel(this, text, x + 1, y + 1, { color: C.shadow, align: 'center' }).setDepth(599);
+    const label = makeLabel(this, text, x, y, { color, align: 'center' }).setDepth(600);
+    shadow.setScaleValue(1.7);
+    label.setScaleValue(1.7);
+
+    this.tweens.add({ targets: [shadow, label], scale: 1, duration: 120, ease: 'Back.Out' });
     this.tweens.add({
-      targets: label,
-      y: label.y - 18,
+      targets: [shadow, label],
+      y: '-=16',
       alpha: 0,
-      duration: 620,
-      ease: 'Quad.Out',
-      onComplete: () => label.destroy()
+      delay: 300,
+      duration: 420,
+      ease: 'Quad.In',
+      onComplete: () => {
+        const left = (this.floats.get(uid) ?? 1) - 1;
+        if (left > 0) this.floats.set(uid, left);
+        else this.floats.delete(uid);
+        if (shadow.active) shadow.destroy();
+        if (label.active) label.destroy();
+      }
     });
   }
 
@@ -918,6 +1070,7 @@ export class BattleScene extends Phaser.Scene {
   private onResult(outcome: BattleOutcome, rewards?: BattleRewards): void {
     this.outcome = outcome;
     this.mode = 'result';
+    this.snapShown();
     this.cmd.setVisible(false);
     this.actorLabel.setText('');
     // Nothing meaningful is queued behind a result; fold any late log lines in.
