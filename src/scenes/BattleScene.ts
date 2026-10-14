@@ -14,10 +14,11 @@ import {
 } from '../battle/BattleEngine';
 import { STATUSES, hasStatus } from '../battle/Status';
 import type { BattleAction, BattleUnit } from '../battle/Types';
-import { SCENES, TIMING, VIEW_H, VIEW_W } from '../config/constants';
+import { SCENES, TIMING } from '../config/constants';
 import { gs } from '../core/GameApp';
 import { bus } from '../core/EventBus';
 import { session } from '../core/Session';
+import { cover, onStageResize, stage } from '../core/Stage';
 import { ITEMS } from '../data/Items';
 import { SKILLS } from '../data/Skills';
 import { STORY } from '../data/Story';
@@ -47,18 +48,67 @@ interface PartyRow {
   mpText: Label;
 }
 
-/** Panel + sprite geometry for the 640x360 battle frame. */
-const L = {
-  party: { x: 12, y: 252, w: 214, h: 100 },
-  log: { x: 232, y: 252, w: 200, h: 100 },
-  cmd: { x: 438, y: 252, w: 190, h: 100 },
-  partyX: 96,
-  partyY: 236,
-  partyGap: 54,
-  foeX: 404,
-  foeY: 230,
-  foeGap: 72
-} as const;
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Panel + sprite geometry for one battle frame. */
+interface BattleLayout {
+  party: Rect;
+  log: Rect;
+  cmd: Rect;
+  partyX: number;
+  partyY: number;
+  partyGap: number;
+  foeX: number;
+  foeY: number;
+  foeGap: number;
+  gaugeW: number;
+  rowH: number;
+  noteX: number;
+}
+
+/**
+ * The three panels live in a band pinned to the bottom of the stage and the
+ * sprites stand on top of it. The ratios are the 640x360 baseline, so a
+ * baseline stage gets exactly the classic frame and a wider window only gets
+ * wider panels — never a stretched-out sprite row.
+ */
+function battleLayout(w: number, h: number, partyCount: number): BattleLayout {
+  const bh = Math.max(84, Math.min(140, Math.round(h * 0.278)));
+  const by = Math.max(24, h - bh - 8);
+  const bandW = Math.max(240, Math.min(w - 24, 1200));
+  const bandX = Math.round((w - bandW) / 2);
+  const gap = 6;
+  const inner = bandW - gap * 2;
+
+  const partyW = Math.round((inner * 214) / 604);
+  const logW = Math.round((inner * 200) / 604);
+  const cmdW = inner - partyW - logW;
+  const party: Rect = { x: bandX, y: by, w: partyW, h: bh };
+  const log: Rect = { x: party.x + partyW + gap, y: by, w: logW, h: bh };
+  const cmd: Rect = { x: log.x + logW + gap, y: by, w: cmdW, h: bh };
+
+  const n = Math.max(1, partyCount);
+  return {
+    party,
+    log,
+    cmd,
+    partyX: bandX + 84,
+    partyY: by - 16,
+    partyGap: Math.round((54 * bh) / 100),
+    foeX: bandX + bandW - 224,
+    foeY: by - 22,
+    foeGap: Math.max(56, Math.min(120, Math.round(bandW * 0.117))),
+    gaugeW: Math.max(40, Math.min(160, partyW - 110)),
+    // Rows keep their 30px pitch while they fit, and tighten for a full party.
+    rowH: n > 1 ? Math.max(16, Math.min(30, Math.floor((bh - 38) / (n - 1)))) : 30,
+    noteX: cmd.x + Math.max(60, cmdW - 68)
+  };
+}
 
 /** Log lines kept on screen. */
 const LOG_LINES = 4;
@@ -76,6 +126,11 @@ export class BattleScene extends Phaser.Scene {
   private history: string[] = [];
   private resultLabels: Label[] = [];
   private veil!: Phaser.GameObjects.Rectangle;
+  private bg!: Phaser.GameObjects.Image;
+  private panels!: { party: Panel; log: Panel; cmd: Panel };
+  private resultPanel: Panel | null = null;
+  private resultLines: string[] = [];
+  private L!: BattleLayout;
 
   private mode: Mode = 'idle';
   private pending: BattleEvent[] = [];
@@ -120,6 +175,8 @@ export class BattleScene extends Phaser.Scene {
     this.history = [];
     this.logLabels = [];
     this.resultLabels = [];
+    this.resultPanel = null;
+    this.resultLines = [];
     this.pending = [];
     this.entryIds = [];
     this.hold = 0;
@@ -146,18 +203,22 @@ export class BattleScene extends Phaser.Scene {
     });
 
     if (!this.textures.exists(this.backdrop)) this.backdrop = 'arena_forest';
-    this.add.image(0, 0, this.backdrop).setOrigin(0, 0).setDepth(-10);
+    this.bg = this.add.image(0, 0, this.backdrop).setOrigin(0, 0).setDepth(-10);
 
+    this.L = battleLayout(stage.w, stage.h, this.engine.party.length);
     this.registerFxAnims();
     this.buildUnits();
     this.buildPanels();
 
     this.veil = this.add
-      .rectangle(0, 0, VIEW_W, VIEW_H, 0x000000)
+      .rectangle(0, 0, 1, 1, 0x000000)
       .setOrigin(0, 0)
       .setAlpha(0)
       .setDepth(1000);
     this.tweens.add({ targets: this.veil, alpha: { from: 1, to: 0 }, duration: TIMING.fade });
+
+    this.relayout();
+    onStageResize(this, () => this.relayout());
 
     this.pad = new KeyPad(this);
     this.events.once('shutdown', () => this.pad?.destroy());
@@ -171,10 +232,10 @@ export class BattleScene extends Phaser.Scene {
 
   private buildUnits(): void {
     this.engine.party.forEach((u, i) => {
-      this.addSprite(u, L.partyX + i * L.partyGap, L.partyY + i * 4, false);
+      this.addSprite(u, this.L.partyX + i * this.L.partyGap, this.L.partyY + i * 4, false);
     });
     this.engine.foes.forEach((u, i) => {
-      this.addSprite(u, L.foeX + i * L.foeGap, L.foeY + i * 4, true);
+      this.addSprite(u, this.L.foeX + i * this.L.foeGap, this.L.foeY + i * 4, true);
     });
   }
 
@@ -274,36 +335,95 @@ export class BattleScene extends Phaser.Scene {
   /* ---------------------------------------------------------------- panels */
 
   private buildPanels(): void {
-    new Panel(this, L.party.x, L.party.y, L.party.w, L.party.h).setDepth(500);
-    new Panel(this, L.log.x, L.log.y, L.log.w, L.log.h).setDepth(500);
-    new Panel(this, L.cmd.x, L.cmd.y, L.cmd.w, L.cmd.h).setDepth(500);
+    const L = this.L;
+    this.panels = {
+      party: new Panel(this, L.party.x, L.party.y, L.party.w, L.party.h).setDepth(500),
+      log: new Panel(this, L.log.x, L.log.y, L.log.w, L.log.h).setDepth(500),
+      cmd: new Panel(this, L.cmd.x, L.cmd.y, L.cmd.w, L.cmd.h).setDepth(500)
+    };
 
     this.engine.party.forEach((u, i) => {
-      const y = L.party.y + 12 + i * 30;
+      const y = L.party.y + 12 + i * L.rowH;
       this.rows.push({
         unit: u,
         name: makeLabel(this, u.name.toUpperCase(), L.party.x + 12, y, { color: C.text }).setDepth(501),
-        hp: new Gauge(this, L.party.x + 12, y + 11, 104, 7, 'hp').setDepth(501),
-        mp: new Gauge(this, L.party.x + 12, y + 21, 104, 5, 'mp').setDepth(501),
-        hpText: makeLabel(this, '', L.party.x + 122, y + 10, { color: C.dim }).setDepth(501),
-        mpText: makeLabel(this, '', L.party.x + 122, y + 20, { color: C.dim }).setDepth(501)
+        hp: new Gauge(this, L.party.x + 12, y + 11, L.gaugeW, 7, 'hp').setDepth(501),
+        mp: new Gauge(this, L.party.x + 12, y + 21, L.gaugeW, 5, 'mp').setDepth(501),
+        hpText: makeLabel(this, '', L.party.x + 12 + L.gaugeW + 6, y + 10, { color: C.dim }).setDepth(501),
+        mpText: makeLabel(this, '', L.party.x + 12 + L.gaugeW + 6, y + 20, { color: C.dim }).setDepth(501)
       });
     });
 
     this.actorLabel = makeLabel(this, '', L.cmd.x + 8, L.cmd.y + 6, { color: C.gold }).setDepth(501);
-    this.roundLabel = makeLabel(this, '', VIEW_W - 8, 8, { color: C.gold, align: 'right' }).setDepth(501);
+    this.roundLabel = makeLabel(this, '', stage.w - 8, 8, { color: C.gold, align: 'right' }).setDepth(501);
     this.cmd = new MenuList({
       scene: this,
       x: L.cmd.x + 24,
       y: L.cmd.y + 24,
       rowH: 14,
-      noteX: L.cmd.x + 122,
+      noteX: L.noteX,
       onConfirm: () => this.onCommand(),
       // Above the command panel (500), or the menu hides behind its own frame.
       depth: 501
     });
     this.cmd.setVisible(false);
     this.paintLog();
+  }
+
+  /**
+   * A resize re-derives the band and moves everything already on screen: panels
+   * and gauges resize in place, sprites re-anchor unless a tween owns them at
+   * that moment, and the log re-wraps to its new width. Battle state — whose
+   * turn it is, the cursor, the pending events — is untouched.
+   */
+  private relayout(): void {
+    const { w, h } = stage;
+    this.L = battleLayout(w, h, this.engine.party.length);
+    const L = this.L;
+
+    cover(this.bg, w, h);
+    this.veil.setSize(w, h);
+
+    this.panels.party.place(L.party.x, L.party.y, L.party.w, L.party.h);
+    this.panels.log.place(L.log.x, L.log.y, L.log.w, L.log.h);
+    this.panels.cmd.place(L.cmd.x, L.cmd.y, L.cmd.w, L.cmd.h);
+
+    this.rows.forEach((row, i) => {
+      const y = L.party.y + 12 + i * L.rowH;
+      row.name.setPosition(L.party.x + 12, y);
+      row.hp.place(L.party.x + 12, y + 11, L.gaugeW, 7);
+      row.mp.place(L.party.x + 12, y + 21, L.gaugeW, 5);
+      row.hpText.setPosition(L.party.x + 12 + L.gaugeW + 6, y + 10);
+      row.mpText.setPosition(L.party.x + 12 + L.gaugeW + 6, y + 20);
+    });
+
+    this.actorLabel.setPosition(L.cmd.x + 8, L.cmd.y + 6);
+    this.roundLabel.setPosition(w - 8, 8);
+    this.cmd.relayout(L.cmd.x + 24, L.cmd.y + 24, L.noteX);
+    this.paintLog();
+    this.rehome();
+
+    if (this.resultLabels.length) this.rebuildResultPanel();
+  }
+
+  /** Sprites stand on the band, so they move with it. */
+  private rehome(): void {
+    const L = this.L;
+    this.engine.party.forEach((u, i) => this.anchor(this.views.get(u.uid), L.partyX + i * L.partyGap, L.partyY + i * 4));
+    this.engine.foes.forEach((u, i) => this.anchor(this.views.get(u.uid), L.foeX + i * L.foeGap, L.foeY + i * 4));
+  }
+
+  private anchor(v: UnitView | undefined, x: number, y: number): void {
+    if (!v) return;
+    v.home = { x, y };
+    // Mid-lunge, mid-flinch: leave the sprite to its tween, which returns it to
+    // the (already updated) home position when it finishes.
+    if (this.tweens.getTweensOf(v.img).length) return;
+    v.img.setPosition(x, y).setDepth(y);
+    v.shadow.setPosition(x, y - 3).setDepth(y - 1);
+    if (v.name) v.name.setPosition(x, y - 48);
+    if (v.gauge) v.gauge.place(x - 26, y - 38, 52, 5);
+    v.tags.forEach((t, i) => t.setPosition(x - 16 + i * 8, y - 12));
   }
 
   private log(text: string): void {
@@ -318,12 +438,12 @@ export class BattleScene extends Phaser.Scene {
     this.logLabels = [];
     const lines: string[] = [];
     for (const entry of this.history.slice(-LOG_LINES)) {
-      lines.push(...wrap(entry, L.log.w - 24).slice(-2));
+      lines.push(...wrap(entry, this.L.log.w - 24).slice(-2));
     }
     const shown = lines.slice(-LOG_LINES);
     shown.forEach((line, i) => {
       this.logLabels.push(
-        makeLabel(this, line, L.log.x + 12, L.log.y + 12 + i * 11, {
+        makeLabel(this, line, this.L.log.x + 12, this.L.log.y + 12 + i * 11, {
           color: i === shown.length - 1 ? C.text : C.dim
         }).setDepth(501)
       );
@@ -831,12 +951,13 @@ export class BattleScene extends Phaser.Scene {
 
   /** Rewards / epitaph card, cleared with any key. */
   private showResultPanel(lines: string[]): void {
-    const shown = lines.slice(0, 10);
-    const w = 300;
-    const h = 30 + shown.length * 14;
-    const x = VIEW_W / 2 - w / 2;
-    const y = Math.max(30, L.party.y - h - 10);
-    new Panel(this, x, y, w, h).setDepth(700);
+    this.resultLines = lines.slice(0, 10);
+    const shown = this.resultLines;
+    const pw = Math.min(300, stage.w - 32);
+    const ph = 30 + shown.length * 14;
+    const x = Math.round(stage.cx - pw / 2);
+    const y = Math.max(12, Math.min(this.L.party.y - ph - 10, stage.h - ph - 12));
+    this.resultPanel = new Panel(this, x, y, pw, ph).setDepth(700);
     shown.forEach((line, i) => {
       this.resultLabels.push(
         makeLabel(this, line.toUpperCase(), x + 14, y + 12 + i * 14, {
@@ -844,12 +965,21 @@ export class BattleScene extends Phaser.Scene {
         }).setDepth(701)
       );
     });
-    const prompt = makeLabel(this, '[Z] CONTINUE', x + w - 14, y + h - 18, {
+    const prompt = makeLabel(this, '[Z] CONTINUE', x + pw - 14, y + ph - 18, {
       color: C.dim,
       align: 'right'
     }).setDepth(701);
     this.resultLabels.push(prompt);
     this.tweens.add({ targets: prompt, alpha: { from: 1, to: 0.3 }, duration: 520, yoyo: true, repeat: -1 });
+  }
+
+  /** The card holds no state, so a resize just redraws it at the new size. */
+  private rebuildResultPanel(): void {
+    this.resultLabels.forEach((l) => l.destroy());
+    this.resultLabels = [];
+    this.resultPanel?.destroy();
+    this.resultPanel = null;
+    this.showResultPanel(this.resultLines);
   }
 
   /** Hand the run back to whichever scene asked for the fight. */

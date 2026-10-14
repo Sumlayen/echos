@@ -8,7 +8,8 @@
 import Phaser from 'phaser';
 import { playTheme, sfx } from '../audio/Audio';
 import { storyFoes } from '../battle/BattleEngine';
-import { SCENES, TIMING, VIEW_H, VIEW_W } from '../config/constants';
+import { SCENES, TIMING } from '../config/constants';
+import { cover, onStageResize, stage } from '../core/Stage';
 import { gs } from '../core/GameApp';
 import { bus } from '../core/EventBus';
 import { session } from '../core/Session';
@@ -38,6 +39,9 @@ export class StoryScene extends Phaser.Scene {
   private transitioning = false;
   private finished = false;
   private bail = false;
+  private bg!: Phaser.GameObjects.Image;
+  private tint!: Phaser.GameObjects.Rectangle;
+  private motes: Phaser.GameObjects.Image[] = [];
 
   constructor() {
     super(SCENES.story);
@@ -52,6 +56,7 @@ export class StoryScene extends Phaser.Scene {
     this.phase = session.storyPhase;
     this.index = -1;
     this.toasts = [];
+    this.motes = [];
     this.transitioning = false;
     this.finished = false;
   }
@@ -63,15 +68,11 @@ export class StoryScene extends Phaser.Scene {
     }
 
     const state = gs(this);
-    this.add.image(0, 0, this.beat.backdrop ?? 'story_village').setOrigin(0, 0);
-    this.add
-      .rectangle(0, 0, VIEW_W, VIEW_H, 0x0b0f1a)
-      .setOrigin(0, 0)
-      .setAlpha(0.34)
-      .setDepth(5);
+    this.bg = this.add.image(0, 0, this.beat.backdrop ?? 'story_village').setOrigin(0, 0);
+    this.tint = this.add.rectangle(0, 0, 1, 1, 0x0b0f1a).setOrigin(0, 0).setAlpha(0.34).setDepth(5);
     this.addMotes();
 
-    this.box = new DialogBox(this, 40, VIEW_H - 92, VIEW_W - 80, 74);
+    this.box = new DialogBox(this, 40, stage.h - 92, stage.w - 80, 74);
     this.box.setVisible(false);
     this.talk = new DialogueRuntime(this.box, state, {
       onBattle: (key) => this.startBattle(key),
@@ -83,10 +84,12 @@ export class StoryScene extends Phaser.Scene {
     });
 
     this.veil = this.add
-      .rectangle(0, 0, VIEW_W, VIEW_H, 0x000000)
+      .rectangle(0, 0, 1, 1, 0x000000)
       .setOrigin(0, 0)
       .setAlpha(0)
       .setDepth(1000);
+    this.relayout();
+    onStageResize(this, () => this.relayout());
     this.pad = new KeyPad(this);
     this.events.once('shutdown', () => this.pad?.destroy());
 
@@ -97,28 +100,59 @@ export class StoryScene extends Phaser.Scene {
     this.show(0);
   }
 
+  /**
+   * Backdrop, veil and dialogue box all follow the stage. The box keeps its
+   * text and typewriter position because `DialogBox.relayout` re-wraps in place.
+   */
+  private relayout(): void {
+    const { w, h, cx } = stage;
+    cover(this.bg, w, h);
+    this.tint.setSize(w, h);
+    this.veil.setSize(w, h);
+
+    const bw = Math.min(w - 32, 900);
+    const bh = Math.min(74, Math.max(52, h - 40));
+    this.box.relayout(Math.round(cx - bw / 2), h - bh - 18, bw, bh);
+
+    this.toasts.forEach((t, i) => t.label.setPosition(cx, 18 + i * 12));
+    this.scatterMotes();
+  }
+
   private addMotes(): void {
     for (let i = 0; i < 14; i++) {
       const mote = this.add
-        .image(
-          Phaser.Math.Between(20, VIEW_W - 20),
-          Phaser.Math.Between(30, 240),
-          'fx',
-          i % 3 === 0 ? 'spark' : 'mote'
-        )
+        .image(0, 0, 'fx', i % 3 === 0 ? 'spark' : 'mote')
         .setDepth(6)
         .setAlpha(0)
         .setTint(i % 4 === 0 ? 0xf0c04e : 0x9fc4ff);
-      this.tweens.add({
-        targets: mote,
-        alpha: { from: 0, to: 0.7 },
-        y: mote.y - Phaser.Math.Between(14, 40),
-        duration: Phaser.Math.Between(2400, 5200),
-        delay: Phaser.Math.Between(0, 2600),
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.InOut'
-      });
+      mote.setData('drift', Phaser.Math.Between(14, 40));
+      mote.setData('dur', Phaser.Math.Between(2400, 5200));
+      mote.setData('delay', Phaser.Math.Between(0, 2600));
+      this.motes.push(mote);
+    }
+    this.scatterMotes();
+  }
+
+  /** Embers fill the upper band of the backdrop; re-scatter when it changes. */
+  private scatterMotes(): void {
+    const bottom = Math.max(60, Math.round(stage.h * 0.66));
+    for (const mote of this.motes) {
+      const y = Phaser.Math.Between(30, bottom);
+      mote.setPosition(Phaser.Math.Between(20, Math.max(40, stage.w - 20)), y);
+      (mote.getData('tween') as Phaser.Tweens.Tween | undefined)?.stop();
+      mote.setData(
+        'tween',
+        this.tweens.add({
+          targets: mote,
+          alpha: { from: 0, to: 0.7 },
+          y: y - (mote.getData('drift') as number),
+          duration: mote.getData('dur') as number,
+          delay: mote.getData('delay') as number,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.InOut'
+        })
+      );
     }
   }
 
@@ -219,7 +253,7 @@ export class StoryScene extends Phaser.Scene {
   }
 
   private toast(text: string): void {
-    const label = makeLabel(this, text, VIEW_W / 2, 18 + this.toasts.length * 12, {
+    const label = makeLabel(this, text, stage.cx, 18 + this.toasts.length * 12, {
       color: C.gold,
       align: 'center'
     });

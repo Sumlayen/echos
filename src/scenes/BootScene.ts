@@ -16,9 +16,10 @@ import { buildFlameAtlas, buildPropAtlas } from '../art/PropArt';
 import { buildTerrainAtlas } from '../art/TileArt';
 import { buildUIAtlas, buildWindowSkins } from '../art/UIArt';
 import type { FrameDef, SpriteAtlas } from '../art/TextureBuild';
-import { GAME_TITLE, SCENES, VIEW_W } from '../config/constants';
+import { GAME_TITLE, SCENES } from '../config/constants';
 import { MAPS, materialsFor } from '../data/World';
-import { makeLabel } from '../ui/Text';
+import { onStageResize, stage } from '../core/Stage';
+import { Label, makeLabel } from '../ui/Text';
 import { C } from '../ui/Window';
 
 /** Built atlases, kept around so scenes can bake from them (e.g. map textures). */
@@ -49,16 +50,23 @@ export function addImage(scene: Phaser.Scene, key: string, pc: { canvas: HTMLCan
 }
 
 export class BootScene extends Phaser.Scene {
+  private titleL!: Label;
+  private statusL!: Label;
+  private bar!: Phaser.GameObjects.Rectangle;
+  private fill!: Phaser.GameObjects.Rectangle;
+  private progress = 0;
+
   constructor() {
     super(SCENES.boot);
   }
 
   create(): void {
-    const cx = VIEW_W / 2;
-    makeLabel(this, GAME_TITLE, cx, 150, { color: C.gold, align: 'center', scale: 2 });
-    const status = makeLabel(this, 'GENERATING ART', cx, 196, { color: C.dim, align: 'center' });
-    const bar = this.add.rectangle(cx, 214, 220, 6, 0x222a3d);
-    const fill = this.add.rectangle(cx - 110, 214, 0, 6, C.gold).setOrigin(0, 0.5);
+    this.titleL = makeLabel(this, GAME_TITLE, 0, 0, { color: C.gold, align: 'center', scale: 2 });
+    this.statusL = makeLabel(this, 'GENERATING ART', 0, 0, { color: C.dim, align: 'center' });
+    this.bar = this.add.rectangle(0, 0, 220, 6, 0x222a3d);
+    this.fill = this.add.rectangle(0, 0, 0, 6, C.gold).setOrigin(0, 0.5);
+    this.place();
+    onStageResize(this, () => this.place());
 
     const steps: { label: string; run: () => void }[] = [
       { label: 'FONT', run: () => addAtlas(this, buildFontAtlas()) },
@@ -91,18 +99,29 @@ export class BootScene extends Phaser.Scene {
 
     steps.forEach((step, i) => {
       this.time.delayedCall(i * 16, () => {
-        status.setText(`GENERATING ART - ${step.label}`);
+        this.statusL.setText(`GENERATING ART - ${step.label}`);
         step.run();
-        fill.setSize(220 * ((i + 1) / steps.length), 6);
+        this.progress = (i + 1) / steps.length;
+        this.place();
       });
     });
 
     this.time.delayedCall(steps.length * 16 + 260, () => {
-      status.setText('READY');
-      bar.setVisible(false);
-      fill.setVisible(false);
+      this.statusL.setText('READY');
+      this.bar.setVisible(false);
+      this.fill.setVisible(false);
       this.time.delayedCall(220, () => this.scene.start(SCENES.title));
     });
+  }
+
+  /** The boot card is centred on the stage, so it re-centres when it changes. */
+  private place(): void {
+    const { cx, cy, w } = stage;
+    const barW = Math.min(220, w - 40);
+    this.titleL.setPosition(cx, cy - 30);
+    this.statusL.setPosition(cx, cy + 16);
+    this.bar.setPosition(cx, cy + 34).setSize(barW, 6);
+    this.fill.setPosition(cx - barW / 2, cy + 34).setSize(barW * this.progress, 6);
   }
 }
 

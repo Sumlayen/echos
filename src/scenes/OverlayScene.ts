@@ -8,12 +8,13 @@ import Phaser from 'phaser';
 import { sfx } from '../audio/Audio';
 import { partyUnit } from '../battle/BattleEngine';
 import { gearStats, xpToNext } from '../battle/Damage';
-import { BALANCE, SCENES, VIEW_H, VIEW_W } from '../config/constants';
+import { BALANCE, SCENES } from '../config/constants';
 import { gs } from '../core/GameApp';
 import { MAX_LEVEL, type PartyMember } from '../core/GameState';
 import { bus } from '../core/EventBus';
 import { SaveManager, saves } from '../core/SaveManager';
 import { session } from '../core/Session';
+import { onStageResize, stage } from '../core/Stage';
 import {
   EQUIP_SLOTS,
   ITEMS,
@@ -55,6 +56,45 @@ const SLOT_LABEL: Record<EquipSlot, string> = {
   accessory: 'TRINKET'
 };
 
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface MenuGeo {
+  panel: Box;
+  list: { x: number; y: number };
+  sub: { x: number };
+  detail: Box;
+  ink: number;
+  right: number;
+  noteY: number;
+  formX: number;
+}
+
+/**
+ * Menu geometry. The frame fills the stage, the list column is pinned to its
+ * left and the detail card to its right — a bigger window buys a wider detail
+ * card rather than a small island of text stranded in the corner. The numbers
+ * are the 640x360 baseline, so the classic menu is unchanged.
+ */
+function menuGeo(w: number, h: number): MenuGeo {
+  const detailW = Math.max(180, Math.min(358, w - 282));
+  const detailX = Math.max(120, w - 32 - detailW);
+  return {
+    panel: { x: 10, y: 8, w: w - 20, h: h - 16 },
+    list: { x: 44, y: 64 },
+    sub: { x: detailX + 50 },
+    detail: { x: detailX, y: 58, w: Math.max(120, w - 32 - detailX), h: Math.max(120, Math.min(214, h - 146)) },
+    ink: detailX + 14,
+    right: w - 24,
+    noteY: h - 24,
+    formX: Math.max(8, Math.round(w / 2 - 150))
+  };
+}
+
 export class OverlayScene extends Phaser.Scene {
   private pad!: KeyPad;
   private list: MenuList | null = null;
@@ -67,6 +107,9 @@ export class OverlayScene extends Phaser.Scene {
   private tabMark!: Phaser.GameObjects.Rectangle;
   private goldLabel!: Label;
   private note!: Label;
+  private keysLabel!: Label;
+  private backdrop!: Phaser.GameObjects.Rectangle;
+  private g!: MenuGeo;
   private rows: string[] = [];
   private tab: Tab = 'party';
   private member = 0;
@@ -94,22 +137,57 @@ export class OverlayScene extends Phaser.Scene {
 
   create(): void {
     const state = gs(this);
-    this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x0b0f1a).setOrigin(0, 0).setAlpha(0.66);
-    this.panel = new Panel(this, 10, 8, VIEW_W - 20, VIEW_H - 16, this.shop ? 'win_shop' : 'win_default');
+    this.g = menuGeo(stage.w, stage.h);
+    this.backdrop = this.add.rectangle(0, 0, stage.w, stage.h, 0x0b0f1a).setOrigin(0, 0).setAlpha(0.66);
+    this.panel = new Panel(
+      this,
+      this.g.panel.x,
+      this.g.panel.y,
+      this.g.panel.w,
+      this.g.panel.h,
+      this.shop ? 'win_shop' : 'win_default'
+    );
 
     makeLabel(this, mapDef(state.location).name.toUpperCase(), 24, 14, { color: C.gold });
-    this.goldLabel = makeLabel(this, `${state.gold} COIN`, VIEW_W - 24, 14, { color: C.gold, align: 'right' });
-    this.note = makeLabel(this, '', 24, VIEW_H - 24, { color: C.dim });
-    makeLabel(this, '[Z] OK   [Q] TABS   [ESC] CLOSE', VIEW_W - 24, VIEW_H - 24, {
+    this.goldLabel = makeLabel(this, `${state.gold} COIN`, this.g.right, 14, { color: C.gold, align: 'right' });
+    this.note = makeLabel(this, '', 24, this.g.noteY, { color: C.dim });
+    this.keysLabel = makeLabel(this, '[Z] OK   [Q] TABS   [ESC] CLOSE', this.g.right, this.g.noteY, {
       color: C.dark,
       align: 'right'
     });
 
     this.buildTabStrip();
     this.showTab();
+    onStageResize(this, () => this.relayout());
 
     this.pad = new KeyPad(this);
     this.events.once('shutdown', () => this.pad?.destroy());
+  }
+
+  /**
+   * The frame follows the window and the open tab is rebuilt inside it. Tab,
+   * member index and list cursor are restored, so resizing mid-menu does not
+   * send the player back to the top of the list.
+   */
+  private relayout(): void {
+    this.g = menuGeo(stage.w, stage.h);
+    const cursor = this.list?.index ?? 0;
+    this.backdrop.setSize(stage.w, stage.h);
+    this.panel?.place(this.g.panel.x, this.g.panel.y, this.g.panel.w, this.g.panel.h);
+    this.goldLabel.setPosition(this.g.right, 14);
+    this.keysLabel.setPosition(this.g.right, this.g.noteY);
+    this.note.setPosition(24, this.g.noteY);
+    this.showTab();
+    this.list?.setIndex(cursor);
+  }
+
+  /**
+   * Note columns in the list belong to the list column: they must stop short of
+   * the detail card, which moves right as the window grows. The equip popup's
+   * notes are placed from `g.sub` instead — those live inside the card.
+   */
+  private noteX(base: number): number {
+    return Math.min(base, this.g.detail.x - 14);
   }
 
   private tabIds(): Tab[] {
@@ -199,11 +277,11 @@ export class OverlayScene extends Phaser.Scene {
     this.member = Phaser.Math.Clamp(this.member, 0, Math.max(0, party.length - 1));
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 20,
       icon: true,
-      noteX: 150,
+      noteX: this.noteX(150),
       onChange: (i) => {
         this.member = i;
         this.paintPartyDetail();
@@ -219,7 +297,7 @@ export class OverlayScene extends Phaser.Scene {
       }))
     );
     this.list.setIndex(this.member);
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.paintPartyDetail();
     this.say('[UP/DOWN] LOOK AT THE PARTY');
   }
@@ -231,7 +309,7 @@ export class OverlayScene extends Phaser.Scene {
     this.detail = [];
     if (!m) return;
 
-    const x = 264;
+    const x = this.g.ink;
     const maxHp = state.memberMaxHp(m);
     const maxMp = state.memberMaxMp(m);
     this.detail.push(makeLabel(this, m.name.toUpperCase(), x, 66, { color: C.gold }));
@@ -278,11 +356,11 @@ export class OverlayScene extends Phaser.Scene {
     this.rows = inv.map((r) => r.id);
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 16,
       icon: true,
-      noteX: 300,
+      noteX: this.noteX(300),
       onChange: (i) => this.say(ITEMS[this.rows[i]]?.desc ?? ''),
       onConfirm: (i) => this.useItem(this.rows[i])
     });
@@ -292,7 +370,7 @@ export class OverlayScene extends Phaser.Scene {
         return { label: def?.name ?? r.id, note: `x${r.count}`, icon: def?.icon };
       })
     );
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.say(`USING GOES TO ${state.active[this.member]?.name.toUpperCase() ?? 'NO ONE'}`);
   }
 
@@ -398,7 +476,7 @@ export class OverlayScene extends Phaser.Scene {
       this.junk.push(makeLabel(this, def?.name ?? '- EMPTY -', 152, y, { color: def ? C.text : C.dark }));
     });
 
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.paintGearDetail();
     this.say('[UP/DOWN] PERSON   [LEFT/RIGHT] SLOT   [Z] CHANGE   [Q] TABS');
   }
@@ -407,7 +485,7 @@ export class OverlayScene extends Phaser.Scene {
     const state = gs(this);
     const m = state.active[this.member];
     if (!m) return;
-    const x = 264;
+    const x = this.g.ink;
     this.detail.push(makeLabel(this, `${m.name.toUpperCase()} - GEAR`, x, 66, { color: C.gold }));
     const live = gearStats(partyUnit(state, m, 0));
     STAT_KEYS.forEach((key, i) => {
@@ -454,11 +532,11 @@ export class OverlayScene extends Phaser.Scene {
     this.sub?.destroy();
     this.sub = new MenuList({
       scene: this,
-      x: 300,
-      y: 64,
+      x: this.g.sub.x,
+      y: this.g.list.y,
       rowH: 16,
       icon: true,
-      noteX: 470,
+      noteX: this.g.sub.x + 170,
       onConfirm: (i) => this.applyEquip(m.id, slot, rows[i])
     });
     this.sub.setItems(
@@ -488,11 +566,11 @@ export class OverlayScene extends Phaser.Scene {
     this.rows = all.map((q) => q.id);
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 20,
       icon: true,
-      noteX: 220,
+      noteX: this.noteX(220),
       onChange: (i) => this.paintQuestDetail(this.rows[i]),
       onConfirm: (i) => this.paintQuestDetail(this.rows[i])
     });
@@ -504,7 +582,7 @@ export class OverlayScene extends Phaser.Scene {
         color: q.done ? C.dark : undefined
       }))
     );
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     if (all.length) this.paintQuestDetail(all[0].id);
     else this.say('NO LEADS YET');
   }
@@ -514,7 +592,7 @@ export class OverlayScene extends Phaser.Scene {
     const def = QUESTS[id];
     const q = state.quest(id);
     if (!def || !q) return;
-    const x = 264;
+    const x = this.g.ink;
     this.detail.forEach((o) => o.destroy());
     this.detail = [];
     this.detail.push(makeLabel(this, def.name.toUpperCase(), x, 66, { color: C.gold }));
@@ -543,11 +621,11 @@ export class OverlayScene extends Phaser.Scene {
   private buildSave(): void {
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 22,
       icon: true,
-      noteX: 170,
+      noteX: this.noteX(170),
       onConfirm: (i) => this.writeSave(i)
     });
     this.list.setItems(
@@ -560,7 +638,7 @@ export class OverlayScene extends Phaser.Scene {
         color: meta ? undefined : C.dark
       }))
     );
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.say('[Z] WRITE THE TALES SO FAR');
   }
 
@@ -579,7 +657,7 @@ export class OverlayScene extends Phaser.Scene {
   /* ------------------------------------------------------------ settings */
 
   private buildSettings(): void {
-    this.form = new SettingsForm(this, VIEW_W / 2 - 150, 70);
+    this.form = new SettingsForm(this, this.g.formX, 70);
     this.say('[LEFT/RIGHT] CHANGE   [UP/DOWN] ROW   [Q] TABS');
   }
 
@@ -591,11 +669,11 @@ export class OverlayScene extends Phaser.Scene {
     this.rows = stock.slice();
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 16,
       icon: true,
-      noteX: 300,
+      noteX: this.noteX(300),
       onChange: (i) => this.say(ITEMS[this.rows[i]]?.desc ?? ''),
       onConfirm: (i) => this.buy(this.rows[i])
     });
@@ -610,7 +688,7 @@ export class OverlayScene extends Phaser.Scene {
         };
       })
     );
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.say('[Z] BUY ONE');
   }
 
@@ -636,11 +714,11 @@ export class OverlayScene extends Phaser.Scene {
     this.rows = rows.map((r) => r.id);
     this.list = new MenuList({
       scene: this,
-      x: 44,
-      y: 64,
+      x: this.g.list.x,
+      y: this.g.list.y,
       rowH: 16,
       icon: true,
-      noteX: 300,
+      noteX: this.noteX(300),
       onChange: (i) => this.say(ITEMS[this.rows[i]]?.desc ?? ''),
       onConfirm: (i) => this.sell(this.rows[i])
     });
@@ -654,7 +732,7 @@ export class OverlayScene extends Phaser.Scene {
         };
       })
     );
-    this.junk.push(new Panel(this, 250, 58, 358, 214));
+    this.junk.push(new Panel(this, this.g.detail.x, this.g.detail.y, this.g.detail.w, this.g.detail.h));
     this.say('[Z] SELL ONE');
   }
 

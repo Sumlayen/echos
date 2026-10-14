@@ -5,6 +5,8 @@
 
 export type Handler<T = unknown> = (payload: T) => void;
 
+import type { StageSize } from './Stage';
+
 export class EventBus<M extends object = Record<string, unknown>> {
   private map = new Map<keyof M, Set<Handler<never>>>();
 
@@ -56,6 +58,7 @@ export interface GameEvents {
   'game:ending': undefined;
   'overlay:close': { tab: string };
   'party:changed': undefined;
+  'stage:resize': StageSize;
 }
 
 export const bus = new EventBus<GameEvents>();

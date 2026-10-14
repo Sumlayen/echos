@@ -126,6 +126,14 @@ export interface MapDef {
   /** Chance per tile stepped. */
   rate: number;
   rows: string[];
+  /**
+   * Material key the land is extended with when the window shows more than the
+   * map covers, so a wide window reads as country running past the border
+   * instead of a map floating in a black box (see `WorldScene.buildBackdrop`).
+   * Outdoor maps name the ground their border ring sits on; interiors leave it
+   * out and stay a lit room in the dark.
+   */
+  outside?: string;
   warps: WarpDef[];
   npcs: NpcDef[];
   chests: ChestDef[];
@@ -317,6 +325,7 @@ export const MAPS: Record<string, MapDef> = {
     theme: 'village',
     arena: 'arena_road',
     rate: 0,
+    outside: 'grass',
     rows: villageRows(),
     spawn: { x: 19, y: 16, dir: 'up' },
     warps: [
@@ -349,6 +358,7 @@ export const MAPS: Record<string, MapDef> = {
     arena: 'arena_forest',
     encounter: 'forest',
     rate: 0.09,
+    outside: 'grass',
     rows: forestRows(),
     spawn: { x: 1, y: 15, dir: 'right' },
     warps: [{ x: 0, y: 15, to: 'village', tx: 38, ty: 13, label: 'Havenport' }],
@@ -376,6 +386,7 @@ export const MAPS: Record<string, MapDef> = {
     arena: 'arena_road',
     encounter: 'road',
     rate: 0.07,
+    outside: 'dirt',
     rows: roadRows(),
     spawn: { x: 21, y: 12, dir: 'up' },
     warps: [
@@ -399,6 +410,7 @@ export const MAPS: Record<string, MapDef> = {
     arena: 'arena_ruins',
     encounter: 'ruins',
     rate: 0.11,
+    outside: 'stone',
     rows: ruinsRows(),
     spawn: { x: 19, y: 1, dir: 'down' },
     warps: [{ x: 19, y: 0, to: 'road', tx: 21, ty: 12, label: 'The Ash Road' }],
