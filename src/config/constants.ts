@@ -50,6 +50,14 @@ export const BALANCE = {
   mdefScale: 0.45,
   defendMult: 0.45,
   guardDefMult: 1.8,
+  /**
+   * A creature that survives a blow answers it this often. Low on purpose: a
+   * counter on every hit turns every attack into a trade and flattens the whole
+   * advantage of getting the first swing in.
+   */
+  counterChance: 0.05,
+  /** Counters swing softer than a normal turn, so the answer is a sting, not a duel. */
+  counterPower: 0.7,
   fleeBase: 0.42,
   xpLevelBase: 24,
   xpLevelLinear: 40,
