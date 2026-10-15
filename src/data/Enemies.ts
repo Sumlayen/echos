@@ -26,7 +26,7 @@ export interface EnemyDef {
   mp: number;
   stats: Record<StatKey, number>;
   xp: number;
-  gold: number;
+  gil: number;
   /** [itemId, chance, count] */
   drops: [string, number, number][];
   resist?: Partial<Record<Element, number>>;
@@ -44,7 +44,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   wolf: en({
     id: 'wolf', name: 'Ashen Wolf', art: 'wolf', level: 2, hp: 34, mp: 0,
     stats: { str: 11, vit: 6, spd: 14, mag: 2, mdef: 4 },
-    xp: 14, gold: 12,
+    xp: 14, gil: 12,
     drops: [['herb', 0.25, 1]],
     ai: [
       { action: 'attack', weight: 6 },
@@ -54,7 +54,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   wisp: en({
     id: 'wisp', name: 'Fog Wisp', art: 'wisp', level: 3, hp: 26, mp: 20,
     stats: { str: 4, vit: 5, spd: 12, mag: 12, mdef: 10 },
-    xp: 18, gold: 16,
+    xp: 18, gil: 16,
     resist: { fire: 1.4, ice: 0.6 },
     drops: [['ether', 0.18, 1]],
     ai: [
@@ -66,7 +66,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   beetle: en({
     id: 'beetle', name: 'Bark Beetle', art: 'beetle', level: 3, hp: 48, mp: 0,
     stats: { str: 12, vit: 13, spd: 6, mag: 2, mdef: 6 },
-    xp: 20, gold: 18,
+    xp: 20, gil: 18,
     resist: { ice: 1.3, fire: 0.8 },
     drops: [['antidote', 0.2, 1]],
     ai: [
@@ -78,7 +78,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   bat: en({
     id: 'bat', name: 'Ruin Bat', art: 'bat', level: 4, hp: 30, mp: 8,
     stats: { str: 10, vit: 5, spd: 18, mag: 6, mdef: 7 },
-    xp: 22, gold: 20,
+    xp: 22, gil: 20,
     drops: [['potion_s', 0.15, 1]],
     ai: [
       { action: 'attack', weight: 6 },
@@ -88,7 +88,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   wraith: en({
     id: 'wraith', name: 'Grave Wraith', art: 'wraith', level: 6, hp: 62, mp: 30,
     stats: { str: 8, vit: 8, spd: 13, mag: 16, mdef: 15 },
-    xp: 44, gold: 44,
+    xp: 44, gil: 44,
     resist: { dark: 0.5, light: 1.6, fire: 1.2 },
     drops: [['revive', 0.12, 1], ['elixir', 0.04, 1]],
     ai: [
@@ -100,7 +100,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   ent: en({
     id: 'ent', name: 'Hollow Ent', art: 'ent', level: 7, hp: 96, mp: 12,
     stats: { str: 18, vit: 16, spd: 4, mag: 8, mdef: 9 },
-    xp: 58, gold: 52,
+    xp: 58, gil: 52,
     resist: { fire: 1.5, ice: 0.7 },
     drops: [['herb', 0.4, 2], ['armor_leather', 0.08, 1]],
     ai: [
@@ -112,7 +112,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   sentinel: en({
     id: 'sentinel', name: 'Rust Sentinel', art: 'sentinel', level: 9, hp: 120, mp: 24,
     stats: { str: 21, vit: 20, spd: 9, mag: 10, mdef: 14 },
-    xp: 82, gold: 90,
+    xp: 82, gil: 90,
     resist: { light: 1.3, dark: 0.8 },
     drops: [['gem', 0.3, 1], ['shield_iron', 0.1, 1]],
     ai: [
@@ -124,7 +124,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   warden: en({
     id: 'warden', name: 'Warden of the First Flame', art: 'warden', level: 14, hp: 460, mp: 99,
     stats: { str: 28, vit: 24, spd: 12, mag: 22, mdef: 20 },
-    xp: 620, gold: 480,
+    xp: 620, gil: 480,
     resist: { fire: 0.5, light: 1.25 },
     boss: true, phaseAt: 0.5, fleeable: false, scale: 1.25,
     drops: [['sword_star', 1, 1], ['amulet_star', 1, 1]],

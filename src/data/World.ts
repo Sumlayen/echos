@@ -96,7 +96,7 @@ export interface ChestDef {
   x: number;
   y: number;
   items: [string, number][];
-  gold?: number;
+  gil?: number;
   /** Flag flipped once opened; the prop swaps to `chest_open`. */
   flag: string;
   message: string;
@@ -344,8 +344,8 @@ export const MAPS: Record<string, MapDef> = {
     ],
     chests: [
       {
-        id: 'v1', x: 5, y: 21, items: [['potion_s', 2]], gold: 20,
-        flag: 'chest.v1', message: 'Two salves and a handful of coin.'
+        id: 'v1', x: 5, y: 21, items: [['potion_s', 2]], gil: 20,
+        flag: 'chest.v1', message: 'Two salves and a handful of gil.'
       }
     ],
     triggers: [{ id: 't_arrival', x: 19, y: 13, story: 'arrival', flag: 'story.arrival' }]

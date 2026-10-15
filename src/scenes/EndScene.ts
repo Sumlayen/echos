@@ -43,7 +43,7 @@ export class EndScene extends Phaser.Scene {
     this.card.setDepth(6);
     const rows = [
       `PLAYTIME   ${SaveManager.formatTime(state.playtime)}`,
-      `COIN       ${state.gold}`,
+      `GIL        ${state.gil}`,
       `PARTY      ${levels || 'NONE'}`,
       `CHESTS     ${Object.keys(state.flags).filter((f) => f.startsWith('chest.')).length} OPENED`
     ];

@@ -313,7 +313,7 @@ export class WorldScene extends Phaser.Scene {
       700
     );
     this.pin(makeLabel(this, this.map.name.toUpperCase(), 8, 6, { color: C.gold }), 702);
-    this.pin(makeLabel(this, `${state.gold} COIN`, 8, 18, { color: C.dim }), 702);
+    this.pin(makeLabel(this, `${state.gil} GIL`, 8, 18, { color: C.dim }), 702);
 
     state.active.slice(0, 3).forEach((m, i) => {
       const y = 34 + i * 18;
@@ -654,9 +654,9 @@ export class WorldScene extends Phaser.Scene {
       state.addItem(id, n);
       this.toast(`+${n} ${ITEMS[id]?.name ?? id}`);
     }
-    if (chest.gold) {
-      state.gold += chest.gold;
-      this.toast(`+${chest.gold} COIN`);
+    if (chest.gil) {
+      state.gil += chest.gil;
+      this.toast(`+${chest.gil} GIL`);
     }
     bus.emit('item:changed', undefined);
     this.refreshHud();
@@ -684,12 +684,12 @@ export class WorldScene extends Phaser.Scene {
 
   private restAtInn(price: number): void {
     const state = gs(this);
-    if (state.gold < price) {
-      this.toast('NOT ENOUGH COIN');
+    if (state.gil < price) {
+      this.toast('NOT ENOUGH GIL');
       sfx('error');
       return;
     }
-    state.gold -= price;
+    state.gil -= price;
     state.restFull();
     sfx('save');
     this.toast('THE PARTY SLEEPS');

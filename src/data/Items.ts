@@ -21,6 +21,10 @@ export interface ItemEffect {
   /** HP restored (flat) or damage dealt when `element` is set. */
   hp?: number;
   mp?: number;
+  /** Fraction of the target's max HP restored (`0.1` = 10%). */
+  hpPct?: number;
+  /** Floor under `hpPct`: never restores fewer HP than this. */
+  hpMin?: number;
   /** Deals damage of this element instead of healing. */
   element?: Element;
   /** Power multiplier applied to the user's ATK/MAG for damage items. */
@@ -62,10 +66,32 @@ export interface ItemDef {
 
 const def = (d: ItemDef): ItemDef => d;
 
+/**
+ * HP one use of this effect restores, before the caller clamps it to max HP.
+ * Flat and percentage effects stack; `hpMin` is the floor under the percentage
+ * alone, so a weak-at-level-1 percentage item still pulls its weight early.
+ * One formula, used by both the field menu and the battle engine.
+ */
+export function itemHealAmount(eff: ItemEffect, maxHp: number): number {
+  const pct = eff.hpPct ? Math.round(maxHp * eff.hpPct) : 0;
+  return (eff.hp ?? 0) + Math.max(eff.hpMin ?? 0, pct);
+}
+
 export const ITEMS: Record<string, ItemDef> = {
   potion_s: def({
     id: 'potion_s', name: 'Salve', kind: 'consumable', price: 12, icon: 'potion_s',
     usable: 'both', effect: { hp: 40 }, desc: 'Restores 40 HP to one ally.'
+  }),
+  /*
+   * The opening healing item: granted 5x on a new playthrough and never
+   * stocked, so it is a head start rather than a shop line. 10% of max HP with
+   * a 15 HP floor — about a fifth of a level-1 bar, and it overtakes the
+   * 12-gil Salve's flat 40 somewhere around level 20, once the bar is past 400.
+   */
+  potion_traveler: def({
+    id: 'potion_traveler', name: 'Traveler Salve', kind: 'consumable', price: 10, icon: 'potion_s',
+    usable: 'both', effect: { hpPct: 0.1, hpMin: 15 },
+    desc: 'Restores 10% of max HP (never less than 15) to one ally.'
   }),
   potion_l: def({
     id: 'potion_l', name: 'Strong Salve', kind: 'consumable', price: 45, icon: 'potion_l',
@@ -204,6 +230,54 @@ export const ITEMS: Record<string, ItemDef> = {
     id: 'amulet_star', name: 'Star Amulet', kind: 'equipment', price: 480, icon: 'amulet',
     equip: { slot: 'accessory', mods: { mdef: 8 }, mp: 25, resist: { dark: 0.5 } },
     desc: 'RES +8, MP +25, halves dark.'
+  }),
+
+  /* ------------------------------------------------------ the starting kit */
+  /*
+   * What the party walks in with (see `src/data/StartingKit.ts`). Deliberately
+   * a rung below the smith's stock and never sold, so the bronze -> iron ->
+   * star ladder stays as balanced and a sold starter piece cannot be bought
+   * back at the forge.
+   */
+  sword_worn: def({
+    id: 'sword_worn', name: 'Worn Shortsword', kind: 'equipment', price: 20, icon: 'sword',
+    equip: { slot: 'weapon', mods: { str: 2 } }, desc: 'ATK +2'
+  }),
+  staff_chipped: def({
+    id: 'staff_chipped', name: 'Chipped Staff', kind: 'equipment', price: 20, icon: 'staff',
+    equip: { slot: 'weapon', mods: { mag: 3 } }, desc: 'MAG +3'
+  }),
+  dagger_worn: def({
+    id: 'dagger_worn', name: 'Worn Dagger', kind: 'equipment', price: 20, icon: 'dagger',
+    equip: { slot: 'weapon', mods: { str: 1, spd: 2 } }, desc: 'ATK +1, SPD +2'
+  }),
+  buckler_worn: def({
+    id: 'buckler_worn', name: 'Worn Buckler', kind: 'equipment', price: 15, icon: 'shield',
+    equip: { slot: 'shield', mods: { vit: 1 } }, desc: 'DEF +1'
+  }),
+  cap_padded: def({
+    id: 'cap_padded', name: 'Padded Cap', kind: 'equipment', price: 15, icon: 'helm',
+    equip: { slot: 'head', mods: { mdef: 1 } }, desc: 'RES +1'
+  }),
+  vest_padded: def({
+    id: 'vest_padded', name: 'Padded Vest', kind: 'equipment', price: 25, icon: 'armor',
+    equip: { slot: 'body', mods: { vit: 2 }, hp: 6 }, desc: 'DEF +2, HP +6'
+  }),
+  robe_linen: def({
+    id: 'robe_linen', name: 'Linen Robe', kind: 'equipment', price: 25, icon: 'robe',
+    equip: { slot: 'body', mods: { mag: 1, mdef: 2 }, mp: 8 }, desc: 'MAG +1, RES +2, MP +8'
+  }),
+  ring_bronze: def({
+    id: 'ring_bronze', name: 'Bronze Band', kind: 'equipment', price: 20, icon: 'ring',
+    equip: { slot: 'accessory', mods: { vit: 1 }, hp: 6 }, desc: 'DEF +1, HP +6'
+  }),
+  charm_star: def({
+    id: 'charm_star', name: 'Star Charm', kind: 'equipment', price: 20, icon: 'amulet',
+    equip: { slot: 'accessory', mods: { mdef: 1 }, mp: 8 }, desc: 'RES +1, MP +8'
+  }),
+  band_leather: def({
+    id: 'band_leather', name: 'Leather Band', kind: 'equipment', price: 20, icon: 'ring',
+    equip: { slot: 'accessory', mods: { spd: 2 } }, desc: 'SPD +2'
   })
 };
 

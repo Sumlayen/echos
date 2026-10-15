@@ -1347,7 +1347,7 @@ export class BattleScene extends Phaser.Scene {
       sfx('victory');
       lines.push('VICTORY');
       lines.push(`XP    +${rewards.xp}`);
-      lines.push(`COIN  +${rewards.gold}`);
+      lines.push(`GIL   +${rewards.gil}`);
       for (const d of rewards.drops) lines.push(`FOUND   ${ITEMS[d.id]?.name ?? d.id} X${d.count}`);
       for (const lv of rewards.levels) {
         lines.push(`${lv.name.toUpperCase()}  LV${lv.from} -> ${lv.to}`);
@@ -1412,7 +1412,7 @@ export class BattleScene extends Phaser.Scene {
 
     bus.emit('battle:end', { outcome });
     bus.emit('party:changed', undefined);
-    bus.emit('gold:changed', state.gold);
+    bus.emit('gil:changed', state.gil);
     bus.emit('state:changed', undefined);
     session.battle = null;
     this.pad.clear();

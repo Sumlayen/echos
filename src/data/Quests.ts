@@ -14,7 +14,7 @@ export interface QuestDef {
   name: string;
   summary: string;
   stages: QuestStage[];
-  reward?: { gold?: number; xp?: number; items?: [string, number][] };
+  reward?: { gil?: number; xp?: number; items?: [string, number][] };
 }
 
 const q = (d: QuestDef): QuestDef => d;
@@ -29,7 +29,7 @@ export const QUESTS: Record<string, QuestDef> = {
       { stage: 1, text: 'Cull four ashen wolves in the Ashen Wood.' },
       { stage: 2, text: 'Report back to Aldous in the plaza.' }
     ],
-    reward: { gold: 60, items: [['potion_l', 2]] }
+    reward: { gil: 60, items: [['potion_l', 2]] }
   }),
 
   q_lantern: q({
@@ -54,7 +54,7 @@ export const QUESTS: Record<string, QuestDef> = {
       { stage: 2, text: 'Take the shard key from the wraith and open the gate.' },
       { stage: 3, text: 'End what waits in the Sunken Ruins.' }
     ],
-    reward: { gold: 400, items: [['amulet_star', 1]] }
+    reward: { gil: 400, items: [['amulet_star', 1]] }
   })
 };
 

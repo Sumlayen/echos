@@ -46,7 +46,7 @@ export interface DialogueEffect {
   addFlag?: [string, number];
   give?: [string, number];
   take?: [string, number];
-  gold?: number;
+  gil?: number;
   recruit?: string;
   quest?: { id: string; stage?: number; done?: boolean };
   /** Opens the shop overlay with this stock key (`SHOP_STOCK`). */
@@ -148,7 +148,7 @@ export const DIALOGUE: Record<string, DialogueVariant[]> = {
     }),
     v({
       id: 'villager.default',
-      lines: [{ speaker: 'Bren', text: 'Inn is north-west, store north-east. Sleep off the bruises; coin buys more than bread.' }]
+      lines: [{ speaker: 'Bren', text: 'Inn is north-west, store north-east. Sleep off the bruises; gil buys more than bread.' }]
     })
   ],
 
@@ -209,7 +209,7 @@ export const DIALOGUE: Record<string, DialogueVariant[]> = {
             { label: 'Walk on' }
           ]
         },
-        { speaker: 'Marrow', text: 'Coin first, questions later.', effect: { shop: 'road' } },
+        { speaker: 'Marrow', text: 'Gil first, questions later.', effect: { shop: 'road' } },
         { speaker: 'Marrow', text: 'Empty those pockets.', effect: { shop: 'sell' } }
       ]
     })
@@ -219,12 +219,12 @@ export const DIALOGUE: Record<string, DialogueVariant[]> = {
     v({
       id: 'inn.rest',
       lines: [
-        { speaker: 'Hesper', text: 'Beds are warm, water is not. Twelve coin for the night.' },
+        { speaker: 'Hesper', text: 'Beds are warm, water is not. Twelve gil for the night.' },
         {
           speaker: 'Hesper',
           text: 'Sleep?',
           choices: [
-            { label: 'Sleep (12 coin)', goto: 2, effect: { inn: 12 } },
+            { label: 'Sleep (12 GIL)', goto: 2, effect: { inn: 12 } },
             { label: 'Not now' }
           ]
         },

@@ -43,7 +43,7 @@ export class EventBus<M extends object = Record<string, unknown>> {
 /** Events the whole game listens for. */
 export interface GameEvents {
   'state:changed': undefined;
-  'gold:changed': number;
+  'gil:changed': number;
   'item:changed': undefined;
   'flag:changed': string;
   'quest:progress': { id: string; stage: number };
