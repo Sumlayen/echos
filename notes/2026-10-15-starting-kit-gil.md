@@ -4,7 +4,7 @@
 | --- | --- |
 | **Branch** | `feat/starting-kit-gil` |
 | **Base** | `develop` at `9854f34` (the notes link) |
-| **Commits** | `8ee5b6c` — Give the party a starting kit, and call the currency gil<br>`1817650` — Cover the opening kit with unit tests and e2e probes<br>plus the commit that amends this file (`git log --oneline notes/`) |
+| **Commit** | `0423717` — Give the party a starting kit, and call the currency gil (the four branch commits squashed)<br>plus the commit that amends this file (`git log --oneline notes/`) |
 | **Date** | 2026-10-15 |
 | **PR** | [#5](https://github.com/Sumlayen/echos/pull/5) — `feat/starting-kit-gil` → `develop` |
 
