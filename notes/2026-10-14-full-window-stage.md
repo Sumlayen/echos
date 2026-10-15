@@ -6,7 +6,7 @@
 | **Base** | `develop` at `6d5f278` (the menu tab-strip fix, PR #1) |
 | **Commits** | `1878c72` — Fill the whole window at any size<br>plus the commit that adds this file (`git log --oneline notes/`) |
 | **Date** | 2026-10-14 |
-| **PR** | see the header of the PR opened from this branch |
+| **PR** | [#3](https://github.com/Sumlayen/echos/pull/3) — `feat/full-window-stage` → `develop` |
 
 > Written after the fact. This branch was merged into `develop` as `8e5e2e5`
 > before the notes convention in `notes/README.md` existed, so the code and its

@@ -6,7 +6,7 @@
 | **Base** | `develop` at `2e9b438` (the title-screen notes link) |
 | **Commits** | `ca8bbc5` — Advance the battle HUD with the event queue<br>`f26243a` — Pin the battle timing down with engine and e2e checks<br>`f0fb791` — Add PR notes for the battle presentation fix<br>`5ffe994` — Publish the round order and let a survived blow draw a rare answer<br>`95284fa` — Show the turn order and walk attackers into the arena<br>plus the commit that amends this file (`git log --oneline notes/`) |
 | **Date** | 2026-10-14 |
-| **PR** | not opened yet — `fix/damage-targeting-and-ui` → `develop` |
+| **PR** | [#4](https://github.com/Sumlayen/echos/pull/4) — `fix/damage-targeting-and-ui` → `develop` |
 
 ---
 
