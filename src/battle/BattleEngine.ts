@@ -12,7 +12,7 @@
 
 import { ENEMIES, enemy, STORY_BATTLES, ENCOUNTERS, type AiAction, type EnemyDef } from '../data/Enemies';
 import { BALANCE } from '../config/constants';
-import { ITEMS } from '../data/Items';
+import { ITEMS, itemHealAmount } from '../data/Items';
 import { SKILLS, type SkillDef } from '../data/Skills';
 import type { GameState, PartyMember } from '../core/GameState';
 import { Rng } from '../core/Rng';
@@ -57,14 +57,14 @@ export interface LevelGain {
 
 export interface BattleRewards {
   xp: number;
-  gold: number;
+  gil: number;
   drops: { id: string; count: number }[];
   levels: LevelGain[];
 }
 
 export interface BattleOptions {
   seed?: number;
-  /** Extra XP/gold multiplier (story battles). */
+  /** Extra XP/gil multiplier (story battles). */
   rewardMult?: number;
   /** Overrides the flee option entirely. */
   fleeAllowed?: boolean;
@@ -127,7 +127,7 @@ export function foeUnit(def: EnemyDef, index: number, levelBonus = 0): BattleUni
     ai: def.ai,
     aiUses: {},
     xp: Math.round(def.xp * scaleHp),
-    gold: Math.round(def.gold * scaleHp),
+    gil: Math.round(def.gil * scaleHp),
     drops: def.drops
   };
 }
@@ -591,7 +591,8 @@ export class BattleEngine {
           this.log(`${t.name} is drawn back.`);
         }
       } else {
-        if (eff.hp) this.healTo(t, eff.hp);
+        const heal = itemHealAmount(eff, t.maxHp);
+        if (heal) this.healTo(t, heal);
         if (eff.mp) t.mp = Math.min(t.maxMp, t.mp + eff.mp);
         if (eff.cure?.length) {
           const cured = S.cureStatuses(t, eff.cure);
@@ -677,11 +678,11 @@ export class BattleEngine {
     this.outcome = 'victory';
     const mult = this.opts.rewardMult ?? 1;
     let xp = 0;
-    let gold = 0;
+    let gil = 0;
     const drops: { id: string; count: number }[] = [];
     for (const f of this.foes) {
       xp += f.xp ?? 0;
-      gold += f.gold ?? 0;
+      gil += f.gil ?? 0;
       for (const [id, chance, count] of f.drops ?? []) {
         if (!this.rng.chance(chance)) continue;
         const found = drops.find((d) => d.id === id);
@@ -690,7 +691,7 @@ export class BattleEngine {
       }
     }
     xp = Math.round(xp * mult);
-    gold = Math.round(gold * mult);
+    gil = Math.round(gil * mult);
 
     const levels: LevelGain[] = [];
     for (const u of this.party) {
@@ -703,9 +704,9 @@ export class BattleEngine {
         });
       }
     }
-    this.state.gold += gold;
+    this.state.gil += gil;
     for (const d of drops) this.state.addItem(d.id, d.count);
-    this.rewards = { xp, gold, drops, levels };
+    this.rewards = { xp, gil, drops, levels };
     this.push({ t: 'result', outcome: 'victory', rewards: this.rewards });
   }
 

@@ -151,10 +151,10 @@ export class DialogueRuntime {
         this.hooks.notify(`-${n} ${ITEMS[id]?.name ?? id}`);
       }
     }
-    if (e.gold) {
-      s.gold = Math.max(0, s.gold + e.gold);
-      bus.emit('gold:changed', s.gold);
-      this.hooks.notify(`${e.gold > 0 ? '+' : ''}${e.gold} COIN`);
+    if (e.gil) {
+      s.gil = Math.max(0, s.gil + e.gil);
+      bus.emit('gil:changed', s.gil);
+      this.hooks.notify(`${e.gil > 0 ? '+' : ''}${e.gil} GIL`);
     }
     if (e.recruit) {
       const level = Math.max(1, Math.round(avgLevel(s)));

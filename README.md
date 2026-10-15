@@ -73,7 +73,12 @@ NPCs, an inn that rests the party, a shop, one-shot story triggers, and per-map 
 encounter rates.
 
 **Party.** Three predefined characters with their own personalities, skills and equipment
-growth — **Kael**, **Lyra** and **Rowan**.
+growth — **Kael**, **Lyra** and **Rowan**. A new playthrough opens kitted out: **400 GIL**,
+five **Traveler Salve** potions, and each character wears a worn kit of their own — declared
+in `src/data/StartingKit.ts` and applied inside `createMember()`, so a character recruited
+later in a run arrives dressed rather than naked. The kit pieces sit a rung below the
+smith's stock and are never sold, so the bronze → iron → star ladder keeps the balance it
+was tuned on.
 
 **Battles.** Side-view, turn order driven by speed, run by a pure engine
 (`src/battle/BattleEngine.ts`) that is fully decoupled from the Phaser scene. Commands are
@@ -82,9 +87,9 @@ growth — **Kael**, **Lyra** and **Rowan**.
 with weighted per-map encounter groups and scripted story line-ups, enemy AI with per-action
 use limits, 13 status effects (poison, burn, freeze, sleep, stun, curse, blind, slow, sink,
 silence, raise, ward, haste), elemental resistances, crits, guard stances, XP and level-ups,
-gold, item drops, and a flee roll that scales with the party's speed advantage — locked
+gil, item drops, and a flee roll that scales with the party's speed advantage — locked
 entirely in boss and scripted fights. Losing sends the party home, revived and lighter on
-gold, rather than ending the run.
+gil, rather than ending the run.
 
 **Story.** Six data-driven beats (`arrival`, `first_wraith`, `hermit_offer`, `ruins_gate`,
 `boss_warden`, `ending`) that play dialogue over a backdrop, hand off to a fixed battle,
@@ -93,7 +98,9 @@ in the journal.
 
 **Persistence.** Four `localStorage` save slots (`eotfs.save.v1`, a versioned envelope with
 an FNV-1a checksum so a truncated save fails closed instead of corrupting a run) and
-separate settings storage. The title screen offers New Game / Continue / Settings / Credits.
+separate settings storage. The payload is at **version 4**, which renamed the currency field
+`gold` → `gil`; older saves still load because `gilFromSave()` falls back to the `gold` key.
+The title screen offers New Game / Continue / Settings / Credits.
 
 **Presentation.** All art is drawn procedurally into textures at boot (`src/art/`), and all
 audio is synthesised with the Web Audio API (`src/audio/Audio.ts`) — Phaser's own audio is
@@ -114,10 +121,14 @@ npm test                   # vitest run — engine unit tests
 npm run test:watch         # while iterating on the engine
 ```
 
-The unit tests (`tests/battle-engine.test.ts`) exercise the battle engine directly, with no
+The unit tests (`tests/battle-engine.test.ts`, `tests/starting-kit.test.ts`) exercise the
+engine and the save state directly, with no
 browser: the round queue advancing after a command, every party member being commanded
 before foes act, locked fights refusing a flee, the escape roll producing a `fled` result,
-`fleeChance` scaling with speed inside its cap, and boss battles zeroing the flee chance.
+`fleeChance` scaling with speed inside its cap, and boss battles zeroing the flee chance —
+plus the opening purse (400 GIL, five Traveler Salves, v3 `gold` saves still loading), the
+starter gear each character wears, and the Traveler Salve's `10% of max HP, never under 15`
+heal formula (`itemHealAmount`) both on paper and through a real battle event.
 
 The end-to-end test drives the **real game in a real browser with real key presses**, then
 forces every battle-exit path and screenshots each one. It expects a dev server on port
@@ -196,7 +207,7 @@ src/
   core/       GameApp, GameState, Session (scene hand-off), Rng, SaveManager,
               Settings, EventBus
   data/       all content as data: World maps, Enemies, Skills, Items, Story,
-              Quests, Dialogue, CharacterSpecs
+              Quests, Dialogue, StartingKit, CharacterSpecs
   scenes/     Boot, Title, Story, World, Battle, Overlay, End
   ui/         Dialog, DialogueRuntime, Window (Panel / MenuList), Text, Keys
 tests/        vitest engine tests

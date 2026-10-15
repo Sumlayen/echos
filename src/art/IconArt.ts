@@ -124,6 +124,15 @@ const gem: Icon = (pc) => {
 /* ------------------------------------------------------------- equipment */
 
 const sword: Icon = (pc) => blade(pc, RAMPS.metal[3], RAMPS.metal[2], P.rust);
+/** Same silhouette as the sword, one third the blade — a starter sidearm. */
+const dagger: Icon = (pc) => {
+  pc.line(10, 3, 6, 9, RAMPS.metal[2]);
+  pc.line(11, 4, 7, 10, RAMPS.metal[3]);
+  pc.line(10, 3, 11, 4, RAMPS.metal[3]);
+  pc.rect(4, 8, 4, 2, P.steel);
+  pc.rect(3, 11, 3, 3, P.wood);
+  pc.p(2, 13, P.gold);
+};
 const axe: Icon = (pc) => {
   pc.line(4, 13, 11, 3, P.wood);
   pc.tri(11, 2, 15, 5, 10, 7, RAMPS.metal[2]);
@@ -402,7 +411,7 @@ export const ICONS: Record<string, Icon> = {
   potion_s: potionS, potion_l: potionL, elixir, ether, antidote, revive,
   bread, meat, bomb, ball, torch, treasure, coin, key: keyItem, gem,
   // equipment
-  sword, axe, spear, staff, bow, shield: shieldI, helm, armor, robe,
+  sword, dagger, axe, spear, staff, bow, shield: shieldI, helm, armor, robe,
   gloves, boots, ring, amulet,
   // skills + status
   fire, ice, thunder, light, dark, heal: healI, buff, debuff,

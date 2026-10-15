@@ -1,11 +1,12 @@
 /**
- * The save-scoped game state: party, inventory, gold, flags, quests and the
+ * The save-scoped game state: party, inventory, gil, flags, quests and the
  * player's position. Pure data + methods, no Phaser, so it is unit-testable and
  * trivially serialisable.
  */
 
 import { BALANCE, SAVE_VERSION } from '../config/constants';
 import { EQUIP_SLOTS, ITEMS, type EquipDef, type EquipSlot, type StatKey } from '../data/Items';
+import { starterGear } from '../data/StartingKit';
 import { skillsAtLevel } from '../data/Skills';
 import { xpToNext } from '../battle/Damage';
 
@@ -35,7 +36,7 @@ export interface SavePayload {
   party: PartyMember[];
   partyOrder: string[];
   inventory: Record<string, number>;
-  gold: number;
+  gil: number;
   flags: Record<string, FlagValue>;
   quests: Record<string, QuestState>;
   location: string;
@@ -45,6 +46,14 @@ export interface SavePayload {
   playtime: number;
   createdAt: number;
   savedAt: number;
+}
+
+/**
+ * Read the currency out of a save payload. v3 and earlier wrote it as `gold`;
+ * v4 renamed it to `gil`, and those saves still load.
+ */
+export function gilFromSave(p: SavePayload): number {
+  return p.gil ?? (p as SavePayload & { gold?: number }).gold ?? 0;
 }
 
 interface Growth {
@@ -92,19 +101,43 @@ export function statsAt(id: string, level: number): Record<StatKey, number> {
   return out;
 }
 
+/** The starting kit for a character as a complete slot map (`data/StartingKit.ts`). */
+function starterEquipment(id: string): Record<EquipSlot, string | null> {
+  const kit = starterGear(id);
+  const out: Record<EquipSlot, string | null> = {
+    weapon: null,
+    shield: null,
+    head: null,
+    body: null,
+    accessory: null
+  };
+  for (const slot of EQUIP_SLOTS) out[slot] = kit[slot] ?? null;
+  return out;
+}
+
 export function createMember(id: string, level = 1): PartyMember {
   const g = GROWTH[id];
   if (!g) throw new Error(`Unknown character id: ${id}`);
   const base = statsAt(id, level);
+  const equipment = starterEquipment(id);
+  // Starting gear is worn from the first step, so it has to be in the opening
+  // HP/MP pools too — otherwise the bars read short by the gear bonus.
+  let hpBonus = 0;
+  let mpBonus = 0;
+  for (const slot of EQUIP_SLOTS) {
+    const eq = ITEMS[equipment[slot] ?? '']?.equip;
+    hpBonus += eq?.hp ?? 0;
+    mpBonus += eq?.mp ?? 0;
+  }
   return {
     id,
     name: g.name,
     level,
     xp: 0,
-    hp: maxHpFor(level, base.vit),
-    mp: maxMpFor(level, base.mag),
+    hp: maxHpFor(level, base.vit) + hpBonus,
+    mp: maxMpFor(level, base.mag) + mpBonus,
     base,
-    equipment: { weapon: null, shield: null, head: null, body: null, accessory: null },
+    equipment,
     skills: skillsAtLevel(id, level)
   };
 }
@@ -113,7 +146,8 @@ export class GameState {
   party: PartyMember[] = [];
   partyOrder: string[] = [];
   inventory: Record<string, number> = {};
-  gold = 0;
+  // `BALANCE` is `as const`, so the literal needs an explicit `number` here.
+  gil: number = BALANCE.startingGil;
   flags: Record<string, FlagValue> = {};
   quests: Record<string, QuestState> = {};
   location = 'village';
@@ -130,7 +164,8 @@ export class GameState {
     this.party = ids.map((id) => createMember(id));
     this.partyOrder = ids.slice();
     this.inventory = {};
-    this.gold = 0;
+    this.gil = BALANCE.startingGil;
+    for (const [id, count] of Object.entries(BALANCE.startingItems)) this.addItem(id, count);
     this.flags = {};
     this.quests = {};
     this.location = 'village';
@@ -251,8 +286,8 @@ export class GameState {
   buy(id: string, count = 1): boolean {
     const price = ITEMS[id]?.price ?? 0;
     const cost = price * count;
-    if (this.gold < cost) return false;
-    this.gold -= cost;
+    if (this.gil < cost) return false;
+    this.gil -= cost;
     this.addItem(id, count);
     return true;
   }
@@ -260,7 +295,7 @@ export class GameState {
   sell(id: string): boolean {
     const def = ITEMS[id];
     if (!def || def.unique || !this.removeItem(id)) return false;
-    this.gold += Math.floor(def.price * BALANCE.sellRatio);
+    this.gil += Math.floor(def.price * BALANCE.sellRatio);
     return true;
   }
 
@@ -299,7 +334,9 @@ export class GameState {
     const heavy = ['armor_chain', 'armor_star', 'helm_iron', 'shield_iron', 'shield_star'];
     if (m.id === 'lyra') {
       if (heavy.includes(itemId)) return false;
-      if (def.slot === 'weapon' && itemId !== 'staff_oak' && itemId !== 'staff_star') return false;
+      // Any staff is fine for her, no other weapon — the starting
+      // `staff_chipped` has to pass too, so this is a prefix rule now.
+      if (def.slot === 'weapon' && !itemId.startsWith('staff')) return false;
     }
     if (m.id !== 'lyra' && def.slot === 'weapon' && itemId.startsWith('staff')) return false;
     return true;
@@ -390,7 +427,7 @@ export class GameState {
       party: JSON.parse(JSON.stringify(this.party)),
       partyOrder: this.partyOrder.slice(),
       inventory: { ...this.inventory },
-      gold: this.gold,
+      gil: this.gil,
       flags: JSON.parse(JSON.stringify(this.flags)),
       quests: JSON.parse(JSON.stringify(this.quests)),
       location: this.location,
@@ -407,7 +444,8 @@ export class GameState {
     this.party = p.party;
     this.partyOrder = p.partyOrder.length ? p.partyOrder.slice() : p.party.map((m) => m.id);
     this.inventory = { ...p.inventory };
-    this.gold = p.gold;
+    // v3 and earlier wrote the currency as `gold`; v4 renamed it to `gil`.
+    this.gil = gilFromSave(p);
     this.flags = { ...(p.flags ?? {}) };
     this.quests = { ...(p.quests ?? {}) };
     this.location = p.location;

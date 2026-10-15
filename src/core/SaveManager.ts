@@ -5,6 +5,7 @@
 
 import { SAVE_KEY, SAVE_VERSION } from '../config/constants';
 import type { GameState, SavePayload } from './GameState';
+import { gilFromSave } from './GameState';
 
 export interface SaveMeta {
   slot: number;
@@ -13,7 +14,7 @@ export interface SaveMeta {
   location: string;
   party: string[];
   levels: number[];
-  gold: number;
+  gil: number;
   playtime: number;
 }
 
@@ -95,7 +96,7 @@ export class SaveManager {
       location: d.location,
       party: d.party.map((m) => m.name),
       levels: d.party.map((m) => m.level),
-      gold: d.gold,
+      gil: gilFromSave(d),
       playtime: d.playtime ?? 0
     };
   }

@@ -99,7 +99,7 @@ const probe = () =>
       location: state?.location ?? null,
       px: state?.px ?? null,
       py: state?.py ?? null,
-      gold: state?.gold ?? null
+      gil: state?.gil ?? null
     };
   });
 
@@ -219,6 +219,42 @@ const check = (name, pass, detail) => {
   console.log(`${pass ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
   if (!pass) failures.push(`${name}${detail ? ` — ${detail}` : ''}`);
 };
+
+/* --------------------------------------------------------- starting kit */
+
+/**
+ * A fresh playthrough opens kitted out: 400 GIL, five Traveler Salves and a
+ * worn set of gear per member (see `src/data/StartingKit.ts`). Checked before
+ * any battle or `buffParty` has had a chance to move those numbers.
+ */
+const kit = await page.evaluate(() => {
+  const w = window;
+  const state = w.game?.state;
+  const world = w.game?.scene?.getScene('WorldScene');
+  const hud = [];
+  world?.children?.list?.forEach((o) => {
+    // `Label` is a textured Image, so the string lives on `readable`, not `text`.
+    const t = o?.readable ?? o?.text;
+    if (typeof t === 'string' && /GIL/.test(t)) hud.push(t);
+  });
+  const active = state?.active ?? [];
+  return {
+    gil: state?.gil ?? null,
+    salves: state?.itemCount?.('potion_traveler') ?? null,
+    weapons: active.map((m) => state.equippedIn(m.id).find((e) => e.slot === 'weapon')?.itemId ?? 'none'),
+    filled: active.map((m) => state.equippedIn(m.id).length),
+    hud
+  };
+});
+console.log(
+  `kit: gil=${kit.gil} salves=${kit.salves} weapons=${kit.weapons.join(',')} slots=${kit.filled.join(',')} hud=${kit.hud.join('|')}`
+);
+check('a new game opens with 400 GIL', kit.gil === 400, String(kit.gil));
+check('a new game opens with 5 Traveler Salves', kit.salves === 5, String(kit.salves));
+check('the field HUD reads the purse in GIL', kit.hud.some((t) => /^\d+ GIL$/.test(t)), kit.hud.join(' | '));
+check('every member walks in armed', kit.weapons.every((id) => id !== 'none'), kit.weapons.join(','));
+check('the starting kit fills the armour slots too', kit.filled.every((n) => n >= 4), kit.filled.join(','));
+await shot('06b-kit');
 
 /* ------------------------------------------------------- victory (world) */
 

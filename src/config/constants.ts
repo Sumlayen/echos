@@ -18,7 +18,11 @@ export const SCENES = {
 
 export const SAVE_KEY = 'eotfs.save.v1';
 export const SETTINGS_KEY = 'eotfs.settings.v1';
-export const SAVE_VERSION = 3;
+/**
+ * v4 renamed the currency field `gold` -> `gil`. Older saves still load:
+ * `GameState.load()` falls back to the `gold` key via `gilFromSave`.
+ */
+export const SAVE_VERSION = 4;
 
 export const TEXT = {
   /** pixels per glyph column (5x7 glyph inside a 6x8 cell) */
@@ -62,7 +66,15 @@ export const BALANCE = {
   xpLevelBase: 24,
   xpLevelLinear: 40,
   sellRatio: 0.5,
-  innPrice: 12
+  innPrice: 12,
+  /** What a fresh playthrough opens with. */
+  startingGil: 400,
+  /**
+   * Opening consumables. The Traveler Salve heals 10% of max HP with a 15 HP
+   * floor, so it is worth about a fifth of a level-1 bar and stops being the
+   * floor under it around level 7 — see `itemHealAmount` in `src/data/Items.ts`.
+   */
+  startingItems: { potion_traveler: 5 }
 } as const;
 
 /** Debug hooks are only enabled with `?debug=1` in the URL. */

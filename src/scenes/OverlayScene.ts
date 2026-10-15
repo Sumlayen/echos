@@ -21,6 +21,7 @@ import {
   SHOP_STOCK,
   STAT_KEYS,
   STAT_LABEL,
+  itemHealAmount,
   type EquipSlot,
   type StatKey
 } from '../data/Items';
@@ -105,7 +106,7 @@ export class OverlayScene extends Phaser.Scene {
   private detail: Phaser.GameObjects.GameObject[] = [];
   private tabLabels: Label[] = [];
   private tabMark!: Phaser.GameObjects.Rectangle;
-  private goldLabel!: Label;
+  private gilLabel!: Label;
   private note!: Label;
   private keysLabel!: Label;
   private backdrop!: Phaser.GameObjects.Rectangle;
@@ -149,7 +150,7 @@ export class OverlayScene extends Phaser.Scene {
     );
 
     makeLabel(this, mapDef(state.location).name.toUpperCase(), 24, 14, { color: C.gold });
-    this.goldLabel = makeLabel(this, `${state.gold} COIN`, this.g.right, 14, { color: C.gold, align: 'right' });
+    this.gilLabel = makeLabel(this, `${state.gil} GIL`, this.g.right, 14, { color: C.gold, align: 'right' });
     this.note = makeLabel(this, '', 24, this.g.noteY, { color: C.dim });
     this.keysLabel = makeLabel(this, '[Z] OK   [Q] TABS   [ESC] CLOSE', this.g.right, this.g.noteY, {
       color: C.dark,
@@ -174,7 +175,7 @@ export class OverlayScene extends Phaser.Scene {
     const cursor = this.list?.index ?? 0;
     this.backdrop.setSize(stage.w, stage.h);
     this.panel?.place(this.g.panel.x, this.g.panel.y, this.g.panel.w, this.g.panel.h);
-    this.goldLabel.setPosition(this.g.right, 14);
+    this.gilLabel.setPosition(this.g.right, 14);
     this.keysLabel.setPosition(this.g.right, this.g.noteY);
     this.note.setPosition(24, this.g.noteY);
     this.showTab();
@@ -221,7 +222,7 @@ export class OverlayScene extends Phaser.Scene {
   private showTab(): void {
     this.clearContent();
     this.paintTabs();
-    this.goldLabel.setText(`${gs(this).gold} COIN`);
+    this.gilLabel.setText(`${gs(this).gil} GIL`);
     switch (this.tab) {
       case 'party':
         this.buildParty();
@@ -412,8 +413,9 @@ export class OverlayScene extends Phaser.Scene {
     }
 
     let used = !!eff.revive;
-    if (eff.hp && target.hp < maxHp) {
-      target.hp = Math.min(maxHp, target.hp + eff.hp);
+    const heal = itemHealAmount(eff, maxHp);
+    if (heal && target.hp < maxHp) {
+      target.hp = Math.min(maxHp, target.hp + heal);
       used = true;
     }
     if (eff.mp && target.mp < maxMp) {
@@ -682,9 +684,9 @@ export class OverlayScene extends Phaser.Scene {
         const def = ITEMS[id];
         return {
           label: def?.name ?? id,
-          note: `${def?.price ?? 0} COIN`,
+          note: `${def?.price ?? 0} GIL`,
           icon: def?.icon,
-          enabled: (def?.price ?? 0) <= state.gold
+          enabled: (def?.price ?? 0) <= state.gil
         };
       })
     );
@@ -696,11 +698,11 @@ export class OverlayScene extends Phaser.Scene {
     const state = gs(this);
     if (!state.buy(id)) {
       sfx('error');
-      this.say('NOT ENOUGH COIN');
+      this.say('NOT ENOUGH GIL');
       return;
     }
     sfx('confirm');
-    bus.emit('gold:changed', state.gold);
+    bus.emit('gil:changed', state.gil);
     bus.emit('item:changed', undefined);
     this.say(`BOUGHT ${ITEMS[id]?.name.toUpperCase() ?? ''}`);
     this.showTab();
@@ -727,7 +729,7 @@ export class OverlayScene extends Phaser.Scene {
         const def = ITEMS[r.id];
         return {
           label: def?.name ?? r.id,
-          note: `${Math.floor((def?.price ?? 0) * BALANCE.sellRatio)} COIN  x${r.count}`,
+          note: `${Math.floor((def?.price ?? 0) * BALANCE.sellRatio)} GIL  x${r.count}`,
           icon: def?.icon
         };
       })

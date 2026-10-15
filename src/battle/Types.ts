@@ -37,7 +37,7 @@ export interface BattleUnit {
   ai?: AiAction[];
   aiUses: Record<string, number>;
   xp?: number;
-  gold?: number;
+  gil?: number;
   drops?: [string, number, number][];
   /** Set when the unit is slain during this battle (for death animations). */
   died?: boolean;
