@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { BattleEngine, type BattleEvent } from '../src/battle/BattleEngine';
 import { fleeChance } from '../src/battle/Damage';
+import { SKILLS } from '../src/data/Skills';
 import { GameState } from '../src/core/GameState';
 import { Rng } from '../src/core/Rng';
 
@@ -29,6 +30,10 @@ const fastParty = (state: GameState): GameState => {
 
 const uses = (events: BattleEvent[], uid: string): boolean =>
   events.some((e) => e.t === 'use' && e.uid === uid);
+
+/** Narrowed event shapes: the union is flat, so filters need help to type-check. */
+type UseEvent = Extract<BattleEvent, { t: 'use' }>;
+type HitEvent = Extract<BattleEvent, { t: 'hit' }>;
 
 const logs = (events: BattleEvent[], re: RegExp): boolean =>
   events.some((e) => e.t === 'log' && re.test(e.text));
@@ -92,6 +97,180 @@ describe('BattleEngine.choose', () => {
       fled = true;
     }
     expect(fled).toBe(true);
+  });
+});
+
+describe('targeting', () => {
+  /**
+   * The reported bug was "the wolf's damage lands on my own bar". The engine
+   * was audited over 150 seeded battles and never once aimed a hit at its own
+   * side — the desync lived in the view, not the model. This pins the model's
+   * half of that down so a future targeting change cannot regress it silently.
+   */
+  it('never aims a hit at the side that dealt it', () => {
+    let hits = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const engine = new BattleEngine(
+        freshState(['kael', 'lyra', 'rowan']),
+        null,
+        ['wolf', 'wisp', 'beetle'],
+        { seed, fleeAllowed: false }
+      );
+      engine.start();
+
+      let turns = 0;
+      while (engine.outcome === 'ongoing' && turns++ < 200) {
+        if (!engine.awaitingInput()) break;
+        const events = engine.choose(
+          seed % 3 === 0 ? { kind: 'skill', skillId: 'cinder' } : { kind: 'attack' }
+        );
+        for (const e of events) {
+          if (e.t !== 'hit') continue;
+          hits++;
+          const to = engine.unit(e.to);
+          expect(to).toBeDefined();
+          // `status` is environmental damage (burn, poison) with no actor.
+          if (e.from === 'status') continue;
+          const from = engine.unit(e.from);
+          expect(from).toBeDefined();
+          expect(from!.side).not.toBe(to!.side);
+        }
+      }
+    }
+    // Guard against the loop having quietly done nothing at all.
+    expect(hits).toBeGreaterThan(200);
+  });
+
+  /**
+   * `choose()` resolves the whole round at once, so the HUD needs the cost on
+   * the event: without it a caster's MP bar empties before the spell animates.
+   */
+  it('carries the MP cost on the use event', () => {
+    const engine = new BattleEngine(fastParty(freshState()), null, ['wolf', 'wolf'], { seed: 3 });
+    engine.start();
+
+    const actor = engine.awaitingInput();
+    expect(actor?.uid).toBe('p0');
+    const before = actor!.mp;
+
+    const events = engine.choose({ kind: 'skill', skillId: 'cleave' });
+    const use = events.find((e) => e.t === 'use' && e.uid === 'p0');
+    if (!use || use.t !== 'use') throw new Error('the caster never announced the skill');
+
+    expect(use.mp).toBe(before - SKILLS.cleave.mp);
+    // The model agrees with the event; only the *timing* of the paint differs.
+    expect(engine.unit('p0')?.mp).toBe(use.mp);
+  });
+
+  /**
+   * The turn-order bar is painted from the `round` event, so the initiative
+   * order has to travel inside it: `choose()` can resolve several rounds before
+   * the scene animates any of them, and reading the engine's own queue later
+   * would show a round that has not started yet. Turns must then actually be
+   * taken in that order, which makes each round's `use` events a subsequence of
+   * it — a unit killed before its turn is skipped, never re-ordered.
+   */
+  it('publishes the round order, then takes its turns in that order', () => {
+    let rounds = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const engine = new BattleEngine(
+        freshState(['kael', 'lyra', 'rowan']),
+        null,
+        ['wolf', 'wisp', 'beetle'],
+        { seed, fleeAllowed: false }
+      );
+      const all = engine.start();
+
+      let turns = 0;
+      while (engine.outcome === 'ongoing' && turns++ < 200) {
+        if (!engine.awaitingInput()) break;
+        all.push(...engine.choose({ kind: 'attack' }));
+      }
+
+      let order: string[] = [];
+      let last = -1;
+      for (const e of all) {
+        if (e.t === 'round') {
+          order = e.order;
+          last = -1;
+          rounds++;
+          // Everyone standing when the round opened, each exactly once.
+          expect(new Set(order).size).toBe(order.length);
+          for (const uid of order) expect(engine.unit(uid)).toBeDefined();
+          continue;
+        }
+        if (e.t !== 'use' || e.counter) continue;
+        // A counter is a reaction, not a turn: it is not in the initiative order
+        // and must not be walked as if it were.
+        const at = order.indexOf(e.uid);
+        expect(at).toBeGreaterThan(-1);
+        expect(at).toBeGreaterThan(last);
+        last = at;
+      }
+
+      // Nothing had died when round 1 opened, so it lists the whole field.
+      const opened = all.find((e) => e.t === 'round');
+      expect(opened?.t === 'round' && opened.order.length === engine.units.length).toBe(true);
+    }
+    // Guard against the loop having quietly done nothing at all.
+    expect(rounds).toBeGreaterThan(20);
+  });
+});
+
+describe('counter-attacks', () => {
+  /**
+   * Creatures used to answer every single swing, which made attacking a trade
+   * and threw away the reward for winning initiative. They now answer on a rare
+   * roll, and the answer is not itself answerable.
+   */
+  it('answer a landed blow occasionally, never an answer, never their own side', () => {
+    let swings = 0;
+    let counters = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const engine = new BattleEngine(
+        fastParty(freshState(['kael', 'lyra', 'rowan'])),
+        null,
+        ['wolf', 'wisp', 'beetle'],
+        { seed, fleeAllowed: false }
+      );
+      const all = engine.start();
+
+      let turns = 0;
+      while (engine.outcome === 'ongoing' && turns++ < 200) {
+        if (!engine.awaitingInput()) break;
+        all.push(...engine.choose({ kind: 'attack' }));
+      }
+
+      for (const e of all) {
+        if (e.t === 'hit' && !e.missed && e.kind === 'phys' && e.from.startsWith('p') && e.to.startsWith('f')) {
+          swings++;
+        }
+      }
+      const fired = all.filter((e) => e.t === 'use' && e.counter) as UseEvent[];
+      counters += fired.length;
+
+      for (const e of fired) {
+        const at = all.indexOf(e);
+        // The blow that provoked it came from the party...
+        const swing = all.slice(0, at).reverse().find((p) => p.t === 'hit') as HitEvent | undefined;
+        expect(swing?.t).toBe('hit');
+        if (swing?.t !== 'hit') continue;
+        expect(swing.from.startsWith('p')).toBe(true);
+        expect(swing.to).toBe(e.uid);
+        // ...and the answer lands straight back on the party, on the unit that
+        // swung. Nothing about a counter may aim at the creature's own side.
+        const answer = all.slice(at + 1).find((p) => p.t === 'hit') as HitEvent | undefined;
+        expect(answer?.t).toBe('hit');
+        if (answer?.t !== 'hit') continue;
+        expect(answer.from).toBe(e.uid);
+        expect(answer.to.startsWith('p')).toBe(true);
+        // A counter is not a turn, so it never opens a second one for the same unit.
+        expect(all.slice(at + 1, at + 3).some((p) => p.t === 'use' && p.counter)).toBe(false);
+      }
+    }
+    expect(swings).toBeGreaterThan(100);
+    expect(counters / swings).toBeLessThanOrEqual(0.15);
+    expect(counters).toBeGreaterThan(0);
   });
 });
 

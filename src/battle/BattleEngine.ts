@@ -11,6 +11,7 @@
  */
 
 import { ENEMIES, enemy, STORY_BATTLES, ENCOUNTERS, type AiAction, type EnemyDef } from '../data/Enemies';
+import { BALANCE } from '../config/constants';
 import { ITEMS } from '../data/Items';
 import { SKILLS, type SkillDef } from '../data/Skills';
 import type { GameState, PartyMember } from '../core/GameState';
@@ -22,9 +23,20 @@ import type { BattleAction, BattleUnit, BattleUnitSnapshot } from './Types';
 export type BattleOutcome = 'victory' | 'defeat' | 'fled' | 'ongoing';
 
 export type BattleEvent =
-  | { t: 'round'; round: number }
+  /**
+   * Opens a round. `order` is that round's initiative order, front to back.
+   * It has to travel inside the event: `choose()` can resolve several rounds
+   * before the scene plays a single one, so by the time `round N` animates the
+   * engine's own queue already belongs to a later round.
+   */
+  | { t: 'round'; round: number; order: string[] }
   | { t: 'log'; text: string }
-  | { t: 'use'; uid: string; kind: 'attack' | 'skill' | 'item' | 'defend' | 'flee'; name?: string; skillId?: string; itemId?: string }
+  /**
+   * An actor committed an action. `mp` carries that actor's focus *after* any
+   * cost was paid: `choose()` resolves the whole round at once, so without it
+   * the HUD would spend a skill's MP before the cast has animated.
+   */
+  | { t: 'use'; uid: string; kind: 'attack' | 'skill' | 'item' | 'defend' | 'flee'; name?: string; skillId?: string; itemId?: string; mp?: number; counter?: boolean }
   | { t: 'hit'; from: string; to: string; damage: number; crit: boolean; missed: boolean; element?: string; kind: 'phys' | 'mag' | 'item' }
   | { t: 'heal'; to: string; amount: number }
   | { t: 'status'; to: string; id: string; applied: boolean }
@@ -243,8 +255,8 @@ export class BattleEngine {
     this.round += 1;
     this.fledThisRound = false;
     for (const u of this.units) u.guarding = false;
-    this.push({ t: 'round', round: this.round });
     this.queue = D.turnOrder(this.units, this.rng);
+    this.push({ t: 'round', round: this.round, order: this.queue.map((u) => u.uid) });
     this.runQueue();
   }
 
@@ -355,7 +367,7 @@ export class BattleEngine {
     switch (action.kind) {
       case 'defend':
         actor.guarding = true;
-        this.push({ t: 'use', uid: actor.uid, kind: 'defend' });
+        this.push({ t: 'use', uid: actor.uid, kind: 'defend', mp: actor.mp });
         this.log(`${actor.name} takes a guard.`);
         break;
       case 'flee':
@@ -364,7 +376,7 @@ export class BattleEngine {
       case 'attack': {
         const target = this.pickTarget(actor, action.targetUid);
         if (!target) break;
-        this.push({ t: 'use', uid: actor.uid, kind: 'attack' });
+        this.push({ t: 'use', uid: actor.uid, kind: 'attack', mp: actor.mp });
         this.strike(actor, target, D.physical(actor, target, 1, this.rng), 'phys');
         break;
       }
@@ -384,8 +396,13 @@ export class BattleEngine {
     to: BattleUnit,
     res: D.DamageResult,
     kind: 'phys' | 'mag' | 'item',
-    element?: string
+    element?: string,
+    /** A counter is not itself counterable, or blows would trade forever. */
+    nested = false
   ): void {
+    // The announcement is queued *ahead* of the hit so the log reads the crit
+    // first and the number second, matching the order the two land on screen.
+    if (res.crit) this.log(`Critical hit on ${to.name}!`);
     this.push({
       t: 'hit', from: from?.uid ?? 'status', to: to.uid, damage: res.damage,
       crit: res.crit, missed: res.missed, element, kind
@@ -394,8 +411,24 @@ export class BattleEngine {
       this.log(`${to.name} slips away.`);
       return;
     }
-    if (res.crit) this.log(`Critical hit on ${to.name}!`);
     this.applyDamage(to, res.damage);
+    if (!nested) this.maybeCounter(from, to, kind);
+  }
+
+  /**
+   * A creature still standing after a landed blow answers it — but only every
+   * so often. Countering every swing turns attacking into a trade and throws
+   * away the whole point of winning the initiative, so the answer is a rare
+   * sting rather than a reflex: `BALANCE.counterChance`, and only against the
+   * melee that reached it (spells and thrown items are not within reach).
+   */
+  private maybeCounter(from: BattleUnit | null, to: BattleUnit, kind: 'phys' | 'mag' | 'item'): void {
+    if (kind !== 'phys' || to.side !== 'foe') return;
+    if (!from || !from.alive || !to.alive || from.side !== 'party') return;
+    if (!this.rng.chance(BALANCE.counterChance)) return;
+    this.log(`${to.name} counters!`);
+    this.push({ t: 'use', uid: to.uid, kind: 'attack', mp: to.mp, counter: true });
+    this.strike(to, from, D.physical(to, from, BALANCE.counterPower, this.rng), 'phys', undefined, true);
   }
 
   private applyDamage(to: BattleUnit, amount: number): void {
@@ -481,7 +514,7 @@ export class BattleEngine {
       return;
     }
     actor.mp -= s.mp;
-    this.push({ t: 'use', uid: actor.uid, kind: 'skill', name: s.name, skillId });
+    this.push({ t: 'use', uid: actor.uid, kind: 'skill', name: s.name, skillId, mp: actor.mp });
 
     for (const t of targets) {
       if (s.kind === 'attack') {
@@ -526,7 +559,7 @@ export class BattleEngine {
       this.log(`${actor.name} reaches for nothing.`);
       return;
     }
-    this.push({ t: 'use', uid: actor.uid, kind: 'item', name: def.name, itemId });
+    this.push({ t: 'use', uid: actor.uid, kind: 'item', name: def.name, itemId, mp: actor.mp });
     const aoe = eff.aoe;
     const targets = aoe
       ? (eff.element ? this.enemiesOf(actor) : this.alliesOf(actor).filter((u) => u.alive))
@@ -573,7 +606,7 @@ export class BattleEngine {
   /* ------------------------------------------------------------------ flee */
 
   private doFlee(actor: BattleUnit): void {
-    this.push({ t: 'use', uid: actor.uid, kind: 'flee' });
+    this.push({ t: 'use', uid: actor.uid, kind: 'flee', mp: actor.mp });
     if (this.opts.fleeAllowed === false || this.foes.some((f) => f.boss)) {
       this.log('There is no way out.');
       return;

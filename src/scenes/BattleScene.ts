@@ -37,6 +37,36 @@ interface UnitView {
   name: Label | null;
   tags: Phaser.GameObjects.Image[];
   home: { x: number; y: number };
+  /** True while a walk-in owns the sprite, so nothing else may move it. */
+  busy: boolean;
+  /** The walk-in itself, so starting a second one can retire the first. */
+  chain: Phaser.Tweens.TweenChain | null;
+}
+
+/** One framed portrait in the turn-order bar. */
+interface TurnChip {
+  uid: string;
+  x: number;
+  y: number;
+  h: number;
+  plate: Phaser.GameObjects.Rectangle;
+  art: Phaser.GameObjects.Image | null;
+}
+
+/**
+ * HP, MP and aliveness *as the player has seen them so far*.
+ *
+ * `BattleEngine.choose()` resolves an entire round in one synchronous call and
+ * hands back the events, so the live `BattleUnit` is already at its end-of-round
+ * values while the first event is still waiting in `pending`. Painting those
+ * live values makes the party bar drop the instant ATTACK is committed — before
+ * a single foe has moved — which reads exactly as "my attack hit myself".
+ * Events advance this map one step at a time; `snapShown()` reconciles it.
+ */
+interface ShownState {
+  hp: number;
+  mp: number;
+  alive: boolean;
 }
 
 interface PartyRow {
@@ -110,12 +140,31 @@ function battleLayout(w: number, h: number, partyCount: number): BattleLayout {
   };
 }
 
-/** Log lines kept on screen. */
-const LOG_LINES = 4;
+/** Log line pitch and how many lines the band can carry. */
+const LOG_LINE_H = 11;
+const LOG_LINES_MIN = 3;
+const LOG_LINES_MAX = 6;
+
+/**
+ * Turn-bar geometry. The cells shrink on a narrow stage rather than let the row
+ * run off it, but never below the point where a portrait still reads.
+ */
+const TURN_CELL_W = 26;
+const TURN_GAP = 5;
+// One line of room above the chips for the caret that marks who is acting.
+const TURN_TOP = 12;
+/**
+ * The head-and-shoulders block inside every 26x32 humanoid frame: the frame plan
+ * always puts the skull at the same rows, so one crop works for every character.
+ */
+const PARTY_PORTRAIT = { x: 5, y: 0, w: 16, h: 18 };
 
 export class BattleScene extends Phaser.Scene {
   private engine!: BattleEngine;
   private views = new Map<string, UnitView>();
+  private shown = new Map<string, ShownState>();
+  /** Units with a floating number still on screen, so they can be staggered. */
+  private floats = new Map<string, number>();
   private order: UnitView[] = [];
   private rows: PartyRow[] = [];
   private pad!: KeyPad;
@@ -131,6 +180,14 @@ export class BattleScene extends Phaser.Scene {
   private resultPanel: Panel | null = null;
   private resultLines: string[] = [];
   private L!: BattleLayout;
+  /** The turn-order bar: initiative order left to right along the top. */
+  private turnChips: TurnChip[] = [];
+  private turnSeq: string[] = [];
+  private turnNow: string | null = null;
+  private turnDead = new Set<string>();
+  private turnMark: Phaser.GameObjects.Triangle | null = null;
+  /** Which chip the marker is parked on, so the first placement doesn't slide. */
+  private markAt = -1;
 
   private mode: Mode = 'idle';
   private pending: BattleEvent[] = [];
@@ -170,6 +227,8 @@ export class BattleScene extends Phaser.Scene {
         ? SCENES.story
         : SCENES.world;
     this.views = new Map();
+    this.shown = new Map();
+    this.floats = new Map();
     this.order = [];
     this.rows = [];
     this.history = [];
@@ -179,6 +238,12 @@ export class BattleScene extends Phaser.Scene {
     this.resultLines = [];
     this.pending = [];
     this.entryIds = [];
+    this.turnChips = [];
+    this.turnSeq = [];
+    this.turnNow = null;
+    this.turnDead = new Set();
+    this.turnMark = null;
+    this.markAt = -1;
     this.hold = 0;
     this.mode = 'idle';
     this.actor = null;
@@ -224,6 +289,9 @@ export class BattleScene extends Phaser.Scene {
     this.events.once('shutdown', () => this.pad?.destroy());
     playTheme(this.engine.foes.some((f) => f.boss) ? 'boss' : 'battle');
 
+    // Seed the displayed numbers before the engine resolves anything, so the
+    // first event of the queue animates from what the player is already seeing.
+    this.seedShown();
     this.pending = this.engine.start();
     this.refreshAll();
   }
@@ -253,7 +321,17 @@ export class BattleScene extends Phaser.Scene {
       .setScale(scale)
       .setDepth(y);
 
-    const view: UnitView = { unit: u, img, shadow, gauge: null, name: null, tags: [], home: { x, y } };
+    const view: UnitView = {
+      unit: u,
+      img,
+      shadow,
+      gauge: null,
+      name: null,
+      tags: [],
+      home: { x, y },
+      busy: false,
+      chain: null
+    };
     if (isFoe) {
       view.name = makeLabel(this, this.short(u.name), x, y - 48, {
         color: C.text,
@@ -281,6 +359,15 @@ export class BattleScene extends Phaser.Scene {
     const atlas = this.atlasOf(v.unit);
     if (!this.textures.exists(atlas)) return;
     const isChar = v.unit.side === 'party';
+    // Party members stand dead still between turns. The two-frame idle shifts the
+    // whole body a pixel up and down while the shadow underneath never moves, so
+    // the sprite reads as hovering over the ground instead of standing on it —
+    // and the only motion they should have is the step-in when they attack.
+    if (isChar) {
+      v.img.anims.stop();
+      if (this.textures.get(atlas).has('s_idle0')) v.img.setFrame('s_idle0');
+      return;
+    }
     const key = `battle_idle_${atlas}`;
     if (!this.anims.exists(key)) {
       const wanted = isChar ? ['s_idle0', 's_idle1'] : ['idle0', 'idle1'];
@@ -355,7 +442,8 @@ export class BattleScene extends Phaser.Scene {
     });
 
     this.actorLabel = makeLabel(this, '', L.cmd.x + 8, L.cmd.y + 6, { color: C.gold }).setDepth(501);
-    this.roundLabel = makeLabel(this, '', stage.w - 8, 8, { color: C.gold, align: 'right' }).setDepth(501);
+    // Top-left, so the turn-order bar can own the middle of the top edge.
+    this.roundLabel = makeLabel(this, '', 8, 8, { color: C.gold }).setDepth(540);
     this.cmd = new MenuList({
       scene: this,
       x: L.cmd.x + 24,
@@ -398,10 +486,13 @@ export class BattleScene extends Phaser.Scene {
     });
 
     this.actorLabel.setPosition(L.cmd.x + 8, L.cmd.y + 6);
-    this.roundLabel.setPosition(w - 8, 8);
+    this.roundLabel.setPosition(8, 8);
     this.cmd.relayout(L.cmd.x + 24, L.cmd.y + 24, L.noteX);
     this.paintLog();
     this.rehome();
+    // The bar is centred on the stage and its cells shrink to fit, so a resize
+    // rebuilds it rather than nudging it.
+    this.buildTurnBar();
 
     if (this.resultLabels.length) this.rebuildResultPanel();
   }
@@ -417,13 +508,133 @@ export class BattleScene extends Phaser.Scene {
     if (!v) return;
     v.home = { x, y };
     // Mid-lunge, mid-flinch: leave the sprite to its tween, which returns it to
-    // the (already updated) home position when it finishes.
-    if (this.tweens.getTweensOf(v.img).length) return;
+    // the (already updated) home position when it finishes. A walk-in moves a
+    // proxy object rather than the sprite, so `getTweensOf` cannot see it and
+    // `busy` is what keeps a resize from yanking the unit out from under it.
+    if (this.tweens.getTweensOf(v.img).length || v.busy) return;
     v.img.setPosition(x, y).setDepth(y);
     v.shadow.setPosition(x, y - 3).setDepth(y - 1);
     if (v.name) v.name.setPosition(x, y - 48);
     if (v.gauge) v.gauge.place(x - 26, y - 38, 52, 5);
     v.tags.forEach((t, i) => t.setPosition(x - 16 + i * 8, y - 12));
+  }
+
+  /* -------------------------------------------------------------- turn bar */
+
+  /**
+   * Starts a fresh row for a new round. The order arrives with the `round`
+   * event rather than being read off the engine: `choose()` resolves whole rounds
+   * at once, so the engine's queue has usually run several turns ahead of the
+   * animation that is about to play.
+   */
+  private beginTurnSequence(order: string[]): void {
+    this.turnSeq = order.slice();
+    this.turnNow = null;
+    this.turnDead = new Set();
+    this.buildTurnBar();
+  }
+
+  /**
+   * Paints the initiative order as a row of portraits along the top of the
+   * screen, left to right, so the player can see whose turn is next instead of
+   * inferring it from the log. Rebuilt from scratch on every round and on every
+   * resize — it is a handful of objects, and rebuilding keeps it honest.
+   */
+  private buildTurnBar(): void {
+    for (const c of this.turnChips) {
+      c.plate.destroy();
+      c.art?.destroy();
+    }
+    this.turnChips = [];
+    this.turnMark?.destroy();
+    this.turnMark = null;
+    this.markAt = -1;
+
+    const n = this.turnSeq.length;
+    if (!n) return;
+
+    const cell = Math.max(12, Math.min(TURN_CELL_W, Math.floor((stage.w - 20 - (n - 1) * TURN_GAP) / n)));
+    const h = Math.max(11, Math.round(cell * 0.86));
+    const total = n * (cell + TURN_GAP) - TURN_GAP;
+    const x0 = Math.max(6, Math.round(stage.cx - total / 2));
+    const y = TURN_TOP + Math.round(h / 2);
+
+    this.turnSeq.forEach((uid, i) => {
+      const u = this.engine.unit(uid);
+      if (!u) return;
+      const cx = x0 + i * (cell + TURN_GAP) + Math.round(cell / 2);
+      const chip: TurnChip = {
+        uid,
+        x: cx,
+        y,
+        h,
+        plate: this.add
+          .rectangle(cx, y, cell, h, C.shadow, 0.72)
+          .setStrokeStyle(1, C.dark, 0.9)
+          .setDepth(520),
+        art: null
+      };
+      const atlas = this.atlasOf(u);
+      const frame = u.side === 'party' ? 's_idle0' : 'idle0';
+      if (this.textures.exists(atlas) && this.textures.get(atlas).has(frame)) {
+        // A portrait rather than a whole sprite: characters are cropped to the
+        // head-and-shoulders block, which the humanoid frame plan always draws in
+        // the same place. Beasts are shaped too differently per species to crop
+        // safely, so their whole idle pose is fitted into the cell instead.
+        const crop = u.side === 'party' ? PARTY_PORTRAIT : null;
+        const tex = this.textures.get(atlas);
+        const src = crop ?? { w: tex.get(frame).width, h: tex.get(frame).height };
+        const k = Math.min((cell - 4) / src.w, (h - 4) / src.h);
+        const art = this.add.image(cx, y, atlas, frame).setDepth(521);
+        if (crop) art.setCrop(crop.x, crop.y, crop.w, crop.h);
+        // `setCrop` only rewrites the UVs; the quad is still the full frame, so
+        // without an explicit display size the face is stretched across it.
+        art.setDisplaySize(Math.max(1, Math.round(src.w * k)), Math.max(1, Math.round(src.h * k)));
+        chip.art = art;
+      }
+      this.turnChips.push(chip);
+    });
+
+    // A caret above the row rather than below it: hung under a gold-framed chip,
+    // an upward triangle merged with the frame and the pair read as one object.
+    this.turnMark = this.add.triangle(0, 0, -5, -4, 5, -4, 0, 3, C.gold).setDepth(522).setVisible(false);
+    this.paintTurnBar();
+  }
+
+  /** Repaints chip states: already taken, currently acting, still to come, dead. */
+  private paintTurnBar(): void {
+    const at = this.turnNow ? this.turnSeq.indexOf(this.turnNow) : -1;
+    this.turnChips.forEach((c, i) => {
+      const dead = this.turnDead.has(c.uid);
+      const current = i === at;
+      const spent = at >= 0 && i < at;
+      c.plate.setFillStyle(dead ? 0x2b1726 : C.shadow, current ? 0.95 : 0.72);
+      c.plate.setStrokeStyle(current ? 2 : 1, dead ? C.bad : current ? C.gold : C.dark, dead ? 0.9 : 1);
+      if (!c.art) return;
+      c.art.setAlpha(dead ? 0.22 : current ? 1 : spent ? 0.4 : 0.78);
+      c.art.setY(c.y - (current ? 1 : 0));
+    });
+
+    if (!this.turnMark) return;
+    const chip = at >= 0 && at < this.turnChips.length ? this.turnChips[at] : null;
+    if (!chip) {
+      this.turnMark.setVisible(false);
+      this.markAt = -1;
+      return;
+    }
+    const y = chip.y - Math.round(chip.h / 2) - 5;
+    this.turnMark.setVisible(true);
+    if (this.markAt < 0) this.turnMark.setPosition(chip.x, y);
+    else this.tweens.add({ targets: this.turnMark, x: chip.x, duration: 170, ease: 'Quad.Out' });
+    this.turnMark.setY(y);
+    this.markAt = at;
+  }
+
+  /** Whichever unit is animating right now owns the marker. */
+  private setTurnNow(uid: string): void {
+    if (!this.turnSeq.includes(uid)) return;
+    this.turnNow = uid;
+    this.paintTurnBar();
   }
 
   private log(text: string): void {
@@ -433,17 +644,26 @@ export class BattleScene extends Phaser.Scene {
     this.paintLog();
   }
 
+  /** How many log lines the band can carry at its current height. */
+  private logLines(): number {
+    return Math.max(
+      LOG_LINES_MIN,
+      Math.min(LOG_LINES_MAX, Math.floor((this.L.log.h - 18) / LOG_LINE_H))
+    );
+  }
+
   private paintLog(): void {
     this.logLabels.forEach((l) => l.destroy());
     this.logLabels = [];
+    const keep = this.logLines();
     const lines: string[] = [];
-    for (const entry of this.history.slice(-LOG_LINES)) {
+    for (const entry of this.history.slice(-keep)) {
       lines.push(...wrap(entry, this.L.log.w - 24).slice(-2));
     }
-    const shown = lines.slice(-LOG_LINES);
+    const shown = lines.slice(-keep);
     shown.forEach((line, i) => {
       this.logLabels.push(
-        makeLabel(this, line, this.L.log.x + 12, this.L.log.y + 12 + i * 11, {
+        makeLabel(this, line, this.L.log.x + 12, this.L.log.y + 12 + i * LOG_LINE_H, {
           color: i === shown.length - 1 ? C.text : C.dim
         }).setDepth(501)
       );
@@ -455,18 +675,97 @@ export class BattleScene extends Phaser.Scene {
   private refreshAll(): void {
     for (const row of this.rows) {
       const u = row.unit;
-      row.hp.set(u.maxHp > 0 ? u.hp / u.maxHp : 0, true);
-      row.mp.set(u.maxMp > 0 ? u.mp / u.maxMp : 0, true);
-      row.hpText.setText(`${u.hp}/${u.maxHp}`);
-      row.mpText.setText(`${u.mp}/${u.maxMp}`);
-      row.name.setColor(u.alive ? (u === this.actor ? C.gold : C.text) : C.hpLow);
+      const s = this.shownOf(u);
+      row.hp.set(u.maxHp > 0 ? s.hp / u.maxHp : 0, true);
+      row.mp.set(u.maxMp > 0 ? s.mp / u.maxMp : 0, true);
+      row.hpText.setText(`${s.hp}/${u.maxHp}`);
+      row.mpText.setText(`${s.mp}/${u.maxMp}`);
+      row.name.setColor(s.alive ? (u === this.actor ? C.gold : C.text) : C.hpLow);
     }
     for (const v of this.order) {
-      if (v.gauge) v.gauge.set(v.unit.maxHp > 0 ? v.unit.hp / v.unit.maxHp : 0, true);
-      if (v.name) v.name.setColor(v.unit.alive ? C.text : C.dark);
+      const s = this.shownOf(v.unit);
+      if (v.gauge) v.gauge.set(v.unit.maxHp > 0 ? s.hp / v.unit.maxHp : 0, true);
+      if (v.name) v.name.setColor(s.alive ? C.text : C.dark);
       this.paintTags(v);
     }
     this.roundLabel.setText(`ROUND ${Math.max(1, this.engine.round)}`);
+  }
+
+  /** Start the displayed numbers from full, before the engine resolves a turn. */
+  private seedShown(): void {
+    this.shown.clear();
+    for (const u of [...this.engine.party, ...this.engine.foes]) {
+      this.shown.set(u.uid, { hp: u.hp, mp: u.mp, alive: u.alive });
+    }
+  }
+
+  private shownOf(u: BattleUnit): ShownState {
+    let s = this.shown.get(u.uid);
+    if (!s) {
+      s = { hp: u.hp, mp: u.mp, alive: u.alive };
+      this.shown.set(u.uid, s);
+    }
+    return s;
+  }
+
+  /**
+   * Reconcile the displayed numbers with the model once the queue is empty.
+   * Anything an event does not describe — a boss phase swap, a late bonus —
+   * self-heals here rather than leaving a bar stuck behind the truth.
+   */
+  private snapShown(): void {
+    for (const u of [...this.engine.party, ...this.engine.foes]) {
+      const s = this.shown.get(u.uid);
+      if (s) {
+        s.hp = u.hp;
+        s.mp = u.mp;
+        s.alive = u.alive;
+      }
+    }
+  }
+
+  /**
+   * Move the displayed numbers in step with the event being animated. A `hit`
+   * event is the only thing allowed to lower a bar: the model has already run
+   * the whole round, so skipping this would paint the end state up front.
+   */
+  private applyShown(e: BattleEvent): void {
+    switch (e.t) {
+      case 'use': {
+        const s = this.shown.get(e.uid);
+        if (s && e.mp !== undefined) s.mp = e.mp;
+        break;
+      }
+      case 'hit': {
+        // A miss carries damage 0, so it correctly changes nothing.
+        const s = this.shown.get(e.to);
+        if (s) s.hp = Math.max(0, s.hp - e.damage);
+        break;
+      }
+      case 'heal': {
+        const s = this.shown.get(e.to);
+        if (s) s.hp = Math.min(this.engine.unit(e.to)?.maxHp ?? s.hp, s.hp + e.amount);
+        break;
+      }
+      case 'revive': {
+        const s = this.shown.get(e.uid);
+        if (s) {
+          s.hp = e.hp;
+          s.alive = true;
+        }
+        break;
+      }
+      case 'death': {
+        const s = this.shown.get(e.uid);
+        if (s) {
+          s.hp = 0;
+          s.alive = false;
+        }
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   /** Small status icons under each sprite. */
@@ -531,6 +830,8 @@ export class BattleScene extends Phaser.Scene {
   /* ----------------------------------------------------------- command menu */
 
   private afterEvents(): void {
+    // Nothing is left to animate, so the view and the model must now agree.
+    this.snapShown();
     if (this.engine.outcome !== 'ongoing') return;
     const actor = this.engine.awaitingInput();
     if (!actor) return;
@@ -539,7 +840,8 @@ export class BattleScene extends Phaser.Scene {
 
   private openMenuFor(actor: BattleUnit): void {
     this.actor = actor;
-    this.actorLabel.setText(`${actor.name.toUpperCase()} ${actor.hp}/${actor.maxHp} ${actor.mp}/${actor.maxMp}`);
+    const s = this.shownOf(actor);
+    this.actorLabel.setText(`${actor.name.toUpperCase()} ${s.hp}/${actor.maxHp} ${s.mp}/${actor.maxMp}`);
     this.openMain();
     this.refreshAll();
   }
@@ -632,11 +934,17 @@ export class BattleScene extends Phaser.Scene {
       this.pendingAction = action;
       this.setMenu(
         'target',
-        pool.map((t) => ({
-          label: this.short(t.name),
-          note: `${t.hp}/${t.maxHp}`,
-          color: t.alive ? C.text : C.dark
-        })),
+        // Read the displayed numbers, not the model: the whole HUD has one
+        // source of truth, so a target list can never show HP that has not
+        // finished animating away.
+        pool.map((t) => {
+          const s = this.shownOf(t);
+          return {
+            label: this.short(t.name),
+            note: `${s.hp}/${t.maxHp}`,
+            color: s.alive ? C.text : C.dark
+          };
+        }),
         pool.map((t) => t.uid)
       );
       return;
@@ -666,9 +974,11 @@ export class BattleScene extends Phaser.Scene {
   /* -------------------------------------------------------- event playback */
 
   private play(e: BattleEvent): void {
+    this.applyShown(e);
     switch (e.t) {
       case 'round':
         this.log(`ROUND ${e.round}`);
+        this.beginTurnSequence(e.order);
         this.hold = 460;
         break;
       case 'log':
@@ -676,6 +986,9 @@ export class BattleScene extends Phaser.Scene {
         this.hold = 300;
         break;
       case 'use':
+        // A counter is a reaction, not a turn: the bar keeps showing whose turn
+        // is actually in progress while the answer flies.
+        if (!e.counter) this.setTurnNow(e.uid);
         this.onUse(e.uid, e.kind, e.name, e.skillId);
         break;
       case 'hit':
@@ -693,6 +1006,7 @@ export class BattleScene extends Phaser.Scene {
         this.hold = 320;
         break;
       case 'death':
+        this.turnDead.add(e.uid);
         this.onDeath(e.uid);
         break;
       case 'revive':
@@ -721,8 +1035,9 @@ export class BattleScene extends Phaser.Scene {
     this.hold = 340;
     if (!v) return;
     if (kind === 'attack') {
+      // The walk-in owns the sprite for its whole length and hands the idle pose
+      // back itself, so no `resume()` here — that would cut the return short.
       this.lunge(v);
-      this.resume(v);
     } else if (kind === 'skill') {
       const element = skillId ? SKILLS[skillId]?.element : undefined;
       const orb = element ? `orb_${element}` : '';
@@ -765,7 +1080,10 @@ export class BattleScene extends Phaser.Scene {
     const wanted = kind === 'mag' && element ? `orb_${element}` : kind === 'item' ? 'impact' : 'slash';
     this.fxAt(uid, this.fxKey(wanted) ? wanted : 'impact');
     this.flash(v);
-    this.float(v, String(damage), crit ? C.gold : C.text);
+    this.float(v, String(damage), crit ? C.gold : C.hp);
+    // The number belongs in the log as well: a plain hit otherwise leaves no
+    // trace, and the only bar that visibly moves is the party's own.
+    this.log(`${this.nameOf(uid)} takes ${damage}.`);
     sfx(crit ? 'crit' : 'hit');
     if (crit) this.shakeScreen();
     this.hold = crit ? 520 : 420;
@@ -775,6 +1093,7 @@ export class BattleScene extends Phaser.Scene {
     const v = this.views.get(uid);
     this.fxAt(uid, 'heal');
     if (v) this.float(v, `+${amount}`, C.ok);
+    this.log(`${this.nameOf(uid)} recovers ${amount}.`);
     sfx('heal');
     this.hold = 380;
   }
@@ -850,19 +1169,90 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * A real step-in: wind up, two steps forward, strike, two steps back.
+   *
+   * The old version slid the sprite 26px on a single yoyo tween while its shadow
+   * stayed exactly where it was, which is precisely what made the party look like
+   * it was drifting over the ground. Here the shadow tracks the sprite the whole
+   * way, the feet lift on each step, and the strike pose is held long enough for
+   * the `hit` event (which the scene plays ~340ms later) to land on it.
+   */
   private lunge(v: UnitView): void {
-    const dir = v.unit.side === 'party' ? 1 : -1;
-    this.pose(v, v.unit.side === 'party' ? 's_attack1' : 'attack');
-    this.tweens.add({
-      targets: v.img,
-      x: v.home.x + dir * 26,
-      duration: 140,
-      yoyo: true,
-      ease: 'Quad.In'
+    const party = v.unit.side === 'party';
+    const dir = party ? 1 : -1;
+    const step = 15;
+    const p = { dx: 0, dy: 0 };
+
+    const track = () => {
+      if (!v.img.active) return;
+      // `v.home`, not a captured copy: a stage resize mid-step re-homes the unit
+      // and the rest of the walk-in has to follow the new position.
+      v.img.setPosition(v.home.x + dir * p.dx, v.home.y + p.dy);
+      v.shadow.setPosition(v.home.x + dir * p.dx, v.home.y - 3);
+    };
+
+    // Retire any walk-in still running: two of them writing the same sprite is
+    // how a unit ends up parked somewhere that is not its home.
+    v.chain?.complete();
+
+    v.busy = true;
+    this.pose(v, party ? 's_attack0' : 'idle0');
+
+    // One chain rather than a row of independent tweens. Separate tweens on one
+    // proxy can overlap whenever a frame lands between a `delayedCall` and the
+    // tween it was meant to follow, and whichever loses then leaves the sprite
+    // a couple of pixels off its home position — precisely the hover this pass
+    // exists to kill. A chain is strictly sequential, and its `complete` is the
+    // only thing that decides when the step-in is over.
+    const move = (dx: number, dy: number, duration: number) => ({
+      dx,
+      dy,
+      duration,
+      ease: dy === 0 ? 'Sine.In' : 'Sine.Out',
+      onUpdate: track
+    });
+    const chain = this.tweens.chain({
+      targets: p,
+      tweens: [
+        // lift onto the ball of the foot, step out, plant, step out again...
+        move(step, -2, 95),
+        move(step, 0, 45),
+        move(step * 2, -2, 95),
+        move(step * 2, 0, 45),
+        // ...swing, then walk the weight back onto the rear foot and settle.
+        move(step, -2, 110),
+        move(step, 0, 45),
+        move(0, -2, 110),
+        move(0, 0, 55)
+      ]
+    });
+    v.chain = chain;
+
+    // The frames are decoration on top of the walk; they must never fight it, so
+    // they are dropped once the chain is done with this unit.
+    const pose = (at: number, frame: string) =>
+      this.time.delayedCall(at, () => {
+        if (!chain.isPlaying) return;
+        this.pose(v, frame);
+      });
+    pose(140, party ? 's_attack1' : 'attack');
+    pose(430, party ? 's_attack2' : 'idle1');
+
+    chain.once('complete', () => {
+      if (v.chain === chain) v.chain = null;
+      v.busy = false;
+      // Belt and braces: whatever the chain did, the unit is standing where it
+      // was put and its shadow is back under its feet.
+      p.dx = 0;
+      p.dy = 0;
+      track();
+      this.playIdle(v);
     });
   }
 
   private hop(v: UnitView): void {
+    if (v.busy) return;
     this.tweens.add({ targets: v.img, y: v.home.y - 6, duration: 130, yoyo: true });
   }
 
@@ -871,6 +1261,9 @@ export class BattleScene extends Phaser.Scene {
     this.time.delayedCall(80, () => {
       if (v.img.active) v.img.clearTint();
     });
+    // A unit mid-step is already being carried by its own walk-in; shaking it
+    // would fight that tween and leave it parked off its home position.
+    if (v.busy) return;
     this.tweens.add({
       targets: v.img,
       x: v.home.x + 3,
@@ -883,18 +1276,42 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * A number that pops over a unit, rises and fades. Foes carry a name plate at
+   * `y - 48` and an HP gauge at `y - 38`, so their numbers clear both instead of
+   * landing on top of the name. Concurrent numbers on one unit fan out sideways
+   * so a multi-hit skill stays readable.
+   */
   private float(v: UnitView, text: string, color: number): void {
-    const label = makeLabel(this, text, v.home.x, v.home.y - 42, {
-      color,
-      align: 'center'
-    }).setDepth(600);
+    const uid = v.unit.uid;
+    const n = this.floats.get(uid) ?? 0;
+    this.floats.set(uid, n + 1);
+
+    // 0, -10, +10, -20, +20 ... around the sprite.
+    const step = Math.ceil((n + 1) / 2);
+    const x = v.home.x + (n % 2 === 0 ? step - 1 : -step) * 10;
+    const y = v.home.y - (v.unit.side === 'foe' ? 62 : 44);
+
+    const shadow = makeLabel(this, text, x + 1, y + 1, { color: C.shadow, align: 'center' }).setDepth(599);
+    const label = makeLabel(this, text, x, y, { color, align: 'center' }).setDepth(600);
+    shadow.setScaleValue(1.7);
+    label.setScaleValue(1.7);
+
+    this.tweens.add({ targets: [shadow, label], scale: 1, duration: 120, ease: 'Back.Out' });
     this.tweens.add({
-      targets: label,
-      y: label.y - 18,
+      targets: [shadow, label],
+      y: '-=16',
       alpha: 0,
-      duration: 620,
-      ease: 'Quad.Out',
-      onComplete: () => label.destroy()
+      delay: 300,
+      duration: 420,
+      ease: 'Quad.In',
+      onComplete: () => {
+        const left = (this.floats.get(uid) ?? 1) - 1;
+        if (left > 0) this.floats.set(uid, left);
+        else this.floats.delete(uid);
+        if (shadow.active) shadow.destroy();
+        if (label.active) label.destroy();
+      }
     });
   }
 
@@ -918,6 +1335,7 @@ export class BattleScene extends Phaser.Scene {
   private onResult(outcome: BattleOutcome, rewards?: BattleRewards): void {
     this.outcome = outcome;
     this.mode = 'result';
+    this.snapShown();
     this.cmd.setVisible(false);
     this.actorLabel.setText('');
     // Nothing meaningful is queued behind a result; fold any late log lines in.
