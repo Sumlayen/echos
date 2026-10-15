@@ -248,6 +248,7 @@ await page.evaluate(() => {
     const me = sc.engine.party[0];
     const s = sc.shown?.get(me?.uid);
     if (!me || !s) return;
+    const v = sc.views?.get(me.uid);
     let owed = 0;
     for (const e of sc.pending ?? []) {
       if (e.t === 'hit' && e.to === me.uid) owed += e.damage;
@@ -259,7 +260,29 @@ await page.evaluate(() => {
       painted: sc.rows?.[0]?.hpText?.readable ?? null,
       want: `${me.hp + owed}/${me.maxHp}`,
       floats: sc.children.list.filter((o) => o.depth === 600).length,
-      numbers: (sc.history ?? []).some((h) => /takes \d+\./.test(h))
+      numbers: (sc.history ?? []).some((h) => /takes \d+\./.test(h)),
+      // The turn-order bar: one framed portrait per combatant, in the order the
+      // round event published, with the marker parked on whoever is animating.
+      bar: (sc.turnChips ?? []).length,
+      seq: (sc.turnSeq ?? []).length,
+      faces: (sc.turnChips ?? []).filter((c) => c.art).length,
+      now: sc.turnNow ?? null,
+      mark: sc.turnMark?.visible ?? false,
+      // Feet planted or floating: every unit's offset from the ground line it is
+      // anchored to, plus the gap between it and its own shadow. `moved` marks a
+      // frame where a tween owns the sprite (a hit shake, a cast hop), so the
+      // checks below only judge a unit when nothing is carrying it.
+      drift: [...(sc.views?.values() ?? [])]
+        .filter((v) => v.unit.alive && v.img.visible)
+        .map((v) => ({
+          uid: v.unit.uid,
+          side: v.unit.side,
+          dx: Math.round(v.img.x - v.home.x),
+          dy: Math.round(v.img.y - v.home.y),
+          sx: Math.round(v.img.x - v.shadow.x),
+          busy: !!v.busy,
+          moved: sc.tweens.getTweensOf(v.img).length > 0
+        }))
     });
   });
 });
@@ -294,6 +317,71 @@ check(
 check('the queue really was mid-flight during the run', midQueue.length > 0, `${midQueue.length} frames`);
 check('damage numbers float over the target', peakFloats > 0, `peak ${peakFloats}`);
 check('combat log carries the damage numbers', samples.some((s) => s.numbers));
+
+/* ------------------------------------------------------------- turn-order bar */
+
+const barFrames = samples.filter((s) => s.seq > 0);
+const markerFrames = samples.filter((s) => s.now && s.mark);
+const owners = new Set(samples.map((s) => s.now).filter(Boolean));
+console.log(
+  `  turn bar: ${barFrames.length} frames | peak field ${Math.max(0, ...samples.map((s) => s.seq))} | turns marked ${owners.size}`
+);
+check(
+  'turn bar paints one framed portrait per combatant',
+  barFrames.length > 0 && barFrames.every((s) => s.bar === s.seq && s.faces === s.seq),
+  barFrames.length ? `${barFrames.length} frames, e.g. ${JSON.stringify(barFrames[0])}` : 'never built'
+);
+check(
+  'turn bar marks the unit whose turn is animating',
+  markerFrames.length > 0,
+  `${markerFrames.length} of ${samples.length} frames`
+);
+check(
+  'turn bar walks through more than one combatant',
+  owners.size >= 2,
+  [...owners].join(', ')
+);
+
+/* ------------------------------------------- standing still, stepping in */
+
+const stance = samples.map((s) => s.drift ?? []).flat();
+// A frame counts as parked only when nothing owns the sprite: no walk-in and no
+// shake/hop tween. Parked means standing on the ground line it was placed on, so
+// the offset has to be exactly zero — that is the whole floating bug in one number.
+const parked = stance.filter((d) => !d.busy && !d.moved);
+const adrift = parked.filter((d) => d.dx !== 0 || d.dy !== 0);
+const partyParked = parked.filter((d) => d.side === 'party');
+const stepping = stance.filter((d) => d.busy);
+const stepPeak = stepping.reduce((m, d) => Math.max(m, Math.abs(d.dx)), 0);
+const shadowGap = parked.reduce((m, d) => Math.max(m, Math.abs(d.sx)), 0);
+console.log(
+  `  stance: ${partyParked.length} parked party frames | ${adrift.length} adrift | ${stepping.length} step frames | reach ${stepPeak}px | shadow gap ${shadowGap}px`
+);
+check(
+  'party members stand dead still between turns',
+  partyParked.length > 300 && adrift.filter((d) => d.side === 'party').length === 0,
+  adrift.length ? `${adrift.length} drifting frames, e.g. ${JSON.stringify(adrift[0])}` : `${parked.length} frames`
+);
+check(
+  'nothing is left standing off its home position once its animation ends',
+  adrift.length === 0,
+  adrift.length ? `${adrift.length} frames, e.g. ${JSON.stringify(adrift[0])}` : `${parked.length} parked frames`
+);
+check(
+  'the attack walks in rather than sliding in place',
+  stepping.length > 0 && stepPeak >= 20,
+  `peak reach ${stepPeak}px over ${stepping.length} frames`
+);
+check(
+  'the shadow stays under the sprite while it stands',
+  shadowGap === 0,
+  `widest gap ${shadowGap}px`
+);
+check(
+  'every walk-in ends back on its home position',
+  stance.at(-1)?.busy !== true && (samples.at(-1)?.drift ?? []).every((d) => d.dx === 0 && d.dy === 0),
+  JSON.stringify(samples.at(-1)?.drift)
+);
 
 /* ------------------------------------------------------------------ flee */
 
@@ -792,7 +880,15 @@ const battleGeo = () =>
       mode: s?.mode ?? null,
       cursor: s?.cmd?.index ?? -1,
       panels: L ? [L.party, L.log, L.cmd].map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h })) : [],
-      homes: (s?.order ?? []).map((v) => ({ x: v.home.x, y: v.home.y }))
+      homes: (s?.order ?? []).map((v) => ({ x: v.home.x, y: v.home.y })),
+      // The turn bar is rebuilt on resize, and its cells shrink to fit: every
+      // portrait has to still be on the stage afterwards.
+      bar: (s?.turnChips ?? []).map((c) => ({
+        x: Math.round(c.x),
+        y: Math.round(c.y),
+        art: !!c.art
+      })),
+      seq: (s?.turnSeq ?? []).length
     };
   });
 
@@ -838,6 +934,16 @@ check(
   battleTight.panels.every((p) => fits(p, tight.stage)) &&
     battleTight.homes.every((p) => p.x > 0 && p.x < tight.stage.w && p.y > 0 && p.y < tight.stage.h),
   JSON.stringify({ panels: battleTight.panels, homes: battleTight.homes, stage: tight.stage })
+);
+const barOnStage = (b, stage) =>
+  b.seq > 0 && b.bar.length === b.seq && b.bar.every((c) => c.art && c.x > 0 && c.x < stage.w);
+check(
+  'turn bar is rebuilt, still full and still on the stage after both resizes',
+  barOnStage(battleWide, wide.stage) && barOnStage(battleTight, tight.stage),
+  JSON.stringify({
+    wide: { stage: wide.stage.w, bar: battleWide.bar },
+    tight: { stage: tight.stage.w, bar: battleTight.bar }
+  })
 );
 await shot('27-battle-520x430');
 
