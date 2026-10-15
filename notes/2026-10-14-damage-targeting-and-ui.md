@@ -261,6 +261,10 @@ standing still. Nine new checks:
   chips at x 385/416 on an 800px stage and 245/276 on a 520px one, portraits
   present in both.
 
+The frame counts quoted above are from one run on this machine and move by a few
+hundred either way with timing. The pass conditions do not: chip count equals
+combatant count, parked frames sit exactly on home, walk-ins reach 30px.
+
 ## Verification
 
 Commands, run on the branch:
